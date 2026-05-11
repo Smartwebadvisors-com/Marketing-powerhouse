@@ -44,6 +44,56 @@ const SECTIONS = [
 
 const PLATFORMS = ["LinkedIn", "Twitter/X", "Instagram", "Facebook", "TikTok", "YouTube", "Threads", "Pinterest"];
 
+function loadScript(src) {
+  return new Promise((resolve, reject) => {
+    const existing = document.querySelector(`script[data-src="${src}"]`);
+    if (existing) {
+      if (existing.dataset.loaded === "true") return resolve();
+      existing.addEventListener("load", () => resolve());
+      existing.addEventListener("error", () => reject(new Error(`Failed to load ${src}`)));
+      return;
+    }
+    const s = document.createElement("script");
+    s.src = src;
+    s.dataset.src = src;
+    s.onload = () => { s.dataset.loaded = "true"; resolve(); };
+    s.onerror = () => reject(new Error(`Failed to load ${src}`));
+    document.head.appendChild(s);
+  });
+}
+
+async function readDocAsText(file) {
+  const name = (file.name || "").toLowerCase();
+  if (name.endsWith(".docx")) {
+    if (!window.mammoth) {
+      await loadScript("https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js");
+    }
+    const arrayBuffer = await file.arrayBuffer();
+    const result = await window.mammoth.extractRawText({ arrayBuffer });
+    return result.value || "";
+  }
+  return await file.text();
+}
+
+function downloadCSV(filename, headers, rows) {
+  const escape = (v) => {
+    const s = v == null ? "" : String(v);
+    return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  };
+  const lines = [headers.map(escape).join(",")];
+  for (const row of rows) lines.push(row.map(escape).join(","));
+  const csv = lines.join("\r\n");
+  const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
 async function callClaude(apiKey, system, userPrompt, maxTokens = 2048) {
   if (!apiKey) throw new Error("Missing API key. Open Settings (top right) and paste your Anthropic API key.");
   const res = await fetch(API_URL, {
@@ -282,6 +332,34 @@ function Output({ text, loading }) {
   return <div style={styles.output}>{text}</div>;
 }
 
+function DocUploader({ onText, label = "Upload Brand Doc" }) {
+  const inputRef = useRef(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const handle = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    setBusy(true);
+    setErr("");
+    try {
+      const text = await readDocAsText(file);
+      if (!text.trim()) throw new Error("No readable text found in file.");
+      onText(text);
+    } catch (ex) {
+      setErr(ex.message || "Failed to read file");
+    }
+    setBusy(false);
+  };
+  return (
+    <div style={{ display: "inline-block" }}>
+      <input ref={inputRef} type="file" accept=".txt,.docx" style={{ display: "none" }} onChange={handle} />
+      <Button ghost loading={busy} onClick={() => inputRef.current?.click()}>{label}</Button>
+      {err && <div style={{ color: COLORS.danger, marginTop: 6, fontSize: 12 }}>{err}</div>}
+    </div>
+  );
+}
+
 function SectionHeader({ title, subtitle, actions }) {
   return (
     <div style={styles.header}>
@@ -401,7 +479,10 @@ Deliver: (1) positioning statement, (2) three message pillars, (3) tone guardrai
           </Field>
         </div>
         <Field label="Key Message">
-          <textarea style={styles.textarea} value={brief.keyMessage} onChange={(e) => setBrief({ ...brief, keyMessage: e.target.value })} placeholder="What's the one thing you want the audience to remember?" />
+          <div style={{ marginBottom: 8 }}>
+            <DocUploader onText={(t) => setBrief({ ...brief, keyMessage: t })} />
+          </div>
+          <textarea style={styles.textarea} value={brief.keyMessage} onChange={(e) => setBrief({ ...brief, keyMessage: e.target.value })} placeholder="What's the one thing you want the audience to remember? Or upload a brand doc." />
         </Field>
         <Field label="Constraints & Guardrails">
           <textarea style={styles.textarea} value={brief.constraints} onChange={(e) => setBrief({ ...brief, constraints: e.target.value })} placeholder="Compliance, banned words, mandatories..." />
@@ -986,26 +1067,54 @@ Then a single "ready to paste" line in optimal order.`;
 function ApprovalWorkflow({ approvals, setApprovals }) {
   const [draft, setDraft] = useState("");
   const [owner, setOwner] = useState("");
+  const [platform, setPlatform] = useState("LinkedIn");
+  const [schedDate, setSchedDate] = useState("");
+  const [schedTime, setSchedTime] = useState("");
 
   const submit = () => {
     if (!draft) return;
-    setApprovals([...approvals, { id: Date.now(), text: draft, owner, status: "Pending", submittedAt: new Date().toISOString() }]);
+    setApprovals([...approvals, { id: Date.now(), text: draft, owner, platform, schedDate, schedTime, status: "Pending", submittedAt: new Date().toISOString() }]);
     setDraft("");
     setOwner("");
+    setSchedDate("");
+    setSchedTime("");
   };
 
   const setStatus = (id, status) => {
     setApprovals(approvals.map((a) => (a.id === id ? { ...a, status } : a)));
   };
 
-  const statusColor = (s) => (s === "Approved" ? COLORS.good : s === "Rejected" ? COLORS.danger : COLORS.warn);
+  const statusColor = (s) =>
+    s === "Approved" ? COLORS.good :
+    s === "Scheduled" ? COLORS.teal :
+    s === "Rejected" ? COLORS.danger :
+    COLORS.warn;
+
+  const exportable = approvals.filter((a) => a.status === "Approved" || a.status === "Scheduled");
+
+  const exportCSV = () => {
+    if (!exportable.length) return;
+    const rows = exportable.map((a) => [a.text || "", a.platform || "", a.schedDate || "", a.schedTime || "", a.status]);
+    downloadCSV(`ghl-approvals-${new Date().toISOString().slice(0, 10)}.csv`, ["Post Content", "Platform", "Scheduled Date", "Scheduled Time", "Status"], rows);
+  };
 
   return (
     <div>
-      <SectionHeader title="Approval Workflow" subtitle="Submit, route, and sign off on content drafts." />
+      <SectionHeader
+        title="Approval Workflow"
+        subtitle="Submit, route, and sign off on content drafts."
+        actions={<Button ghost onClick={exportCSV} style={{ opacity: exportable.length ? 1 : 0.5 }}>Export to GHL CSV ({exportable.length})</Button>}
+      />
       <div style={styles.card}>
         <Field label="Draft"><textarea style={styles.textarea} value={draft} onChange={(e) => setDraft(e.target.value)} /></Field>
-        <Field label="Owner / Submitter"><input style={styles.input} value={owner} onChange={(e) => setOwner(e.target.value)} placeholder="Name" /></Field>
+        <div style={styles.row}>
+          <Field label="Owner / Submitter"><input style={styles.input} value={owner} onChange={(e) => setOwner(e.target.value)} placeholder="Name" /></Field>
+          <Field label="Platform"><Select value={platform} onChange={setPlatform} options={PLATFORMS} /></Field>
+        </div>
+        <div style={styles.row}>
+          <Field label="Scheduled Date"><input style={styles.input} type="date" value={schedDate} onChange={(e) => setSchedDate(e.target.value)} /></Field>
+          <Field label="Scheduled Time"><input style={styles.input} type="time" value={schedTime} onChange={(e) => setSchedTime(e.target.value)} /></Field>
+        </div>
         <Button onClick={submit}>Submit for Approval</Button>
       </div>
       <div style={styles.card}>
@@ -1015,17 +1124,33 @@ function ApprovalWorkflow({ approvals, setApprovals }) {
         ) : (
           approvals.map((a) => (
             <div key={a.id} style={{ borderBottom: `1px solid ${COLORS.border}`, padding: "14px 0" }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-                <span style={{ fontWeight: 600, fontSize: 13 }}>{a.owner || "Unassigned"}</span>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, flexWrap: "wrap", gap: 8 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                  <span style={{ fontWeight: 600, fontSize: 13 }}>{a.owner || "Unassigned"}</span>
+                  {a.platform && <span style={styles.pill}>{a.platform}</span>}
+                  {(a.schedDate || a.schedTime) && (
+                    <span style={{ fontSize: 12, color: COLORS.muted }}>
+                      {a.schedDate}{a.schedTime ? ` · ${a.schedTime}` : ""}
+                    </span>
+                  )}
+                </div>
                 <span style={{ ...styles.pill, background: `${statusColor(a.status)}22`, color: statusColor(a.status) }}>{a.status}</span>
               </div>
-              <div style={{ fontSize: 13, marginBottom: 10, color: COLORS.white }}>{a.text}</div>
-              {a.status === "Pending" && (
-                <div style={{ display: "flex", gap: 8 }}>
-                  <button style={{ ...styles.btn, padding: "6px 12px", fontSize: 12 }} onClick={() => setStatus(a.id, "Approved")}>Approve</button>
-                  <button style={{ ...styles.btnGhost, padding: "6px 12px", fontSize: 12 }} onClick={() => setStatus(a.id, "Rejected")}>Reject</button>
-                </div>
-              )}
+              <div style={{ fontSize: 13, marginBottom: 10, color: COLORS.white, whiteSpace: "pre-wrap" }}>{a.text}</div>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                {a.status === "Pending" && (
+                  <>
+                    <button style={{ ...styles.btn, padding: "6px 12px", fontSize: 12 }} onClick={() => setStatus(a.id, "Approved")}>Approve</button>
+                    <button style={{ ...styles.btnGhost, padding: "6px 12px", fontSize: 12 }} onClick={() => setStatus(a.id, "Rejected")}>Reject</button>
+                  </>
+                )}
+                {a.status === "Approved" && (
+                  <button style={{ ...styles.btn, padding: "6px 12px", fontSize: 12 }} onClick={() => setStatus(a.id, "Scheduled")}>Mark Scheduled</button>
+                )}
+                {a.status === "Scheduled" && (
+                  <button style={{ ...styles.btnGhost, padding: "6px 12px", fontSize: 12 }} onClick={() => setStatus(a.id, "Approved")}>Unschedule</button>
+                )}
+              </div>
             </div>
           ))
         )}
@@ -1036,38 +1161,64 @@ function ApprovalWorkflow({ approvals, setApprovals }) {
 
 function CalendarView({ calendar, setCalendar }) {
   const [date, setDate] = useState("");
+  const [time, setTime] = useState("");
   const [platform, setPlatform] = useState("LinkedIn");
   const [text, setText] = useState("");
+  const [monthFilter, setMonthFilter] = useState(() => new Date().toISOString().slice(0, 7));
 
   const add = () => {
     if (!date || !text) return;
-    setCalendar([...calendar, { id: Date.now(), date, platform, text }]);
+    setCalendar([...calendar, { id: Date.now(), date, time, platform, text }]);
     setText("");
+    setTime("");
   };
 
   const remove = (id) => setCalendar(calendar.filter((c) => c.id !== id));
 
-  const grouped = calendar.reduce((acc, c) => {
+  const visible = monthFilter ? calendar.filter((c) => (c.date || "").startsWith(monthFilter)) : calendar;
+
+  const grouped = visible.reduce((acc, c) => {
     (acc[c.date] = acc[c.date] || []).push(c);
     return acc;
   }, {});
   const sortedDates = Object.keys(grouped).sort();
 
+  const exportCSV = () => {
+    if (!visible.length) return;
+    const rows = visible
+      .slice()
+      .sort((a, b) => (a.date || "").localeCompare(b.date || "") || (a.time || "").localeCompare(b.time || ""))
+      .map((c) => [c.text || "", c.platform || "", c.date || "", c.time || "", "Scheduled"]);
+    const tag = monthFilter || "all";
+    downloadCSV(`ghl-calendar-${tag}.csv`, ["Post Content", "Platform", "Scheduled Date", "Scheduled Time", "Status"], rows);
+  };
+
   return (
     <div>
-      <SectionHeader title="Content Calendar" subtitle="Plot every piece against the dates that matter." />
+      <SectionHeader
+        title="Content Calendar"
+        subtitle="Plot every piece against the dates that matter."
+        actions={<Button ghost onClick={exportCSV} style={{ opacity: visible.length ? 1 : 0.5 }}>Export to GHL CSV ({visible.length})</Button>}
+      />
       <div style={styles.card}>
         <div style={styles.row}>
           <Field label="Date"><input style={styles.input} type="date" value={date} onChange={(e) => setDate(e.target.value)} /></Field>
-          <Field label="Platform"><Select value={platform} onChange={setPlatform} options={PLATFORMS} /></Field>
+          <Field label="Time"><input style={styles.input} type="time" value={time} onChange={(e) => setTime(e.target.value)} /></Field>
         </div>
+        <Field label="Platform"><Select value={platform} onChange={setPlatform} options={PLATFORMS} /></Field>
         <Field label="Post"><textarea style={styles.textarea} value={text} onChange={(e) => setText(e.target.value)} /></Field>
         <Button onClick={add}>Add to Calendar</Button>
       </div>
       <div style={styles.card}>
-        <h3 style={{ marginTop: 0 }}>Scheduled ({calendar.length})</h3>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14, gap: 12, flexWrap: "wrap" }}>
+          <h3 style={{ margin: 0 }}>Scheduled · {monthFilter || "All"} ({visible.length})</h3>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <input style={{ ...styles.input, width: 160 }} type="month" value={monthFilter} onChange={(e) => setMonthFilter(e.target.value)} />
+            {monthFilter && <button style={{ ...styles.btnGhost, padding: "6px 10px", fontSize: 11 }} onClick={() => setMonthFilter("")}>Show all</button>}
+          </div>
+        </div>
         {sortedDates.length === 0 ? (
-          <div style={{ color: COLORS.muted, fontSize: 13 }}>No items planned yet.</div>
+          <div style={{ color: COLORS.muted, fontSize: 13 }}>No items planned for this month.</div>
         ) : (
           sortedDates.map((d) => (
             <div key={d} style={{ marginBottom: 16 }}>
@@ -1076,7 +1227,8 @@ function CalendarView({ calendar, setCalendar }) {
                 <div key={c.id} style={{ background: COLORS.cardAlt, padding: 12, borderRadius: 8, marginBottom: 8, display: "flex", justifyContent: "space-between", gap: 12 }}>
                   <div style={{ flex: 1 }}>
                     <span style={styles.pill}>{c.platform}</span>
-                    <div style={{ fontSize: 13, marginTop: 6 }}>{c.text}</div>
+                    {c.time && <span style={{ fontSize: 12, color: COLORS.muted, marginLeft: 6 }}>{c.time}</span>}
+                    <div style={{ fontSize: 13, marginTop: 6, whiteSpace: "pre-wrap" }}>{c.text}</div>
                   </div>
                   <button style={{ ...styles.btnGhost, padding: "4px 10px", fontSize: 11, height: "fit-content" }} onClick={() => remove(c.id)}>×</button>
                 </div>
@@ -1389,6 +1541,9 @@ ${samples}`;
       <SectionHeader title="Voice Trainer" subtitle="Lock in a portable voice profile from real samples." />
       <div style={styles.card}>
         <Field label="Paste 3-5 writing samples (separated with ---)">
+          <div style={{ marginBottom: 8 }}>
+            <DocUploader onText={(t) => setSamples(samples ? `${samples}\n---\n${t}` : t)} label="Upload Sample Doc" />
+          </div>
           <textarea style={{ ...styles.textarea, minHeight: 200 }} value={samples} onChange={(e) => setSamples(e.target.value)} />
         </Field>
         <Button onClick={train} loading={loading}>Train Voice Profile</Button>
