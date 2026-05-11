@@ -42,7 +42,7 @@ const SECTIONS = [
   { id: "voice", label: "Voice Trainer", icon: "♫", group: "Assets" },
 ];
 
-const PLATFORMS = ["LinkedIn", "Twitter/X", "Instagram", "Facebook", "TikTok", "YouTube", "Threads", "Pinterest"];
+const PLATFORMS = ["Instagram", "Facebook", "LinkedIn", "TikTok", "YouTube Shorts", "X/Twitter", "Threads", "Pinterest"];
 
 function loadScript(src) {
   return new Promise((resolve, reject) => {
@@ -607,7 +607,7 @@ ${list.map((t, i) => `${i + 1}. ${t}`).join("\n")}`;
 function CampaignBuilder({ apiKey, brief }) {
   const [theme, setTheme] = useState("");
   const [duration, setDuration] = useState("2 weeks");
-  const [platforms, setPlatforms] = useState("LinkedIn, Twitter/X, Instagram");
+  const [platforms, setPlatforms] = useState("Instagram, Facebook, LinkedIn, TikTok, YouTube Shorts, X/Twitter, Threads, Pinterest");
   const [out, setOut] = useState("");
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState("");
@@ -851,7 +851,7 @@ ${content}`;
 
 function Repurpose({ apiKey }) {
   const [source, setSource] = useState("");
-  const [targets, setTargets] = useState("Twitter/X thread, Instagram carousel, LinkedIn post, YouTube short script");
+  const [targets, setTargets] = useState("Instagram carousel, Facebook post, LinkedIn post, TikTok script, YouTube Shorts script, X/Twitter thread, Threads post, Pinterest pin");
   const [out, setOut] = useState("");
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState("");
@@ -1259,7 +1259,7 @@ function Scheduling({ apiKey }) {
 Audience: ${audience}
 Time zone: ${tz}
 
-For each of LinkedIn, Twitter/X, Instagram and TikTok return:
+For each of Instagram, Facebook, LinkedIn, TikTok, YouTube Shorts, X/Twitter, Threads and Pinterest return:
 - Best day(s) of week
 - Best window of time
 - Reasoning (one line)
