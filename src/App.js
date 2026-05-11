@@ -1634,8 +1634,8 @@ export default function App() {
       `}</style>
       <aside style={styles.sidebar}>
         <div style={styles.brand}>
-          <div style={styles.brandTitle}>Marketing Powerhouse</div>
-          <div style={styles.brandSub}>Social Studio</div>
+          <div style={styles.brandTitle}>Smart Web Advisors</div>
+          <div style={styles.brandSub}>Marketing Powerhouse</div>
         </div>
         {Object.entries(groups).map(([group, items]) => (
           <div key={group}>
