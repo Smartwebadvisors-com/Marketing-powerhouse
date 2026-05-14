@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 
 const COLORS = {
   bg: "#080E1A",
@@ -531,6 +531,15 @@ Label each variant clearly: "Variant 1", "Variant 2", etc.`;
     setLibrary([...library, { platform, text: out, topic, savedAt: new Date().toISOString() }]);
   };
 
+  const exportCSV = () => {
+    if (!out) return;
+    downloadCSV(
+      `ghl-post-${new Date().toISOString().slice(0, 10)}.csv`,
+      ["Post Content", "Platform", "Scheduled Date", "Scheduled Time", "Status"],
+      [[out, platform, "", "", "Draft"]]
+    );
+  };
+
   return (
     <div>
       <SectionHeader title="Generator" subtitle="Multi-variant post writer tuned to your brief." />
@@ -550,6 +559,7 @@ Label each variant clearly: "Variant 1", "Variant 2", etc.`;
         <div style={{ display: "flex", gap: 10 }}>
           <Button onClick={run} loading={loading}>Generate</Button>
           {out && <Button ghost onClick={save}>Save to Library</Button>}
+          {out && <Button ghost onClick={exportCSV}>Download CSV</Button>}
         </div>
         {err && <div style={{ color: COLORS.danger, marginTop: 12, fontSize: 13 }}>{err}</div>}
       </div>
@@ -583,6 +593,30 @@ ${list.map((t, i) => `${i + 1}. ${t}`).join("\n")}`;
     setLoading(false);
   };
 
+  const items = useMemo(() => {
+    if (!out) return [];
+    const parts = out.split(/(?:^|\n)\s*\d+\.\s+/).map((s) => s.trim()).filter((s) => s.length > 0);
+    return parts.length ? parts : [out.trim()];
+  }, [out]);
+
+  const exportAllCSV = () => {
+    if (!items.length) return;
+    const rows = items.map((text) => [text, platform, "", "", "Draft"]);
+    downloadCSV(
+      `ghl-bulk-${new Date().toISOString().slice(0, 10)}.csv`,
+      ["Post Content", "Platform", "Scheduled Date", "Scheduled Time", "Status"],
+      rows
+    );
+  };
+
+  const exportOneCSV = (text) => {
+    downloadCSV(
+      `ghl-bulk-${new Date().toISOString().slice(0, 10)}.csv`,
+      ["Post Content", "Platform", "Scheduled Date", "Scheduled Time", "Status"],
+      [[text, platform, "", "", "Draft"]]
+    );
+  };
+
   return (
     <div>
       <SectionHeader title="Bulk Generate" subtitle="Turn a list of topics into a queue of ready-to-post content." />
@@ -599,7 +633,24 @@ ${list.map((t, i) => `${i + 1}. ${t}`).join("\n")}`;
         )}
         {err && <div style={{ color: COLORS.danger, marginTop: 12, fontSize: 13 }}>{err}</div>}
       </div>
-      <Output text={out} loading={loading} />
+      {loading && <Output text={out} loading={loading} />}
+      {!loading && items.length > 0 && (
+        <div style={{ marginTop: 16 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+            <div style={{ fontSize: 13, color: COLORS.muted }}>{items.length} post{items.length === 1 ? "" : "s"} generated</div>
+            <Button ghost onClick={exportAllCSV}>Download All as CSV</Button>
+          </div>
+          {items.map((text, i) => (
+            <div key={i} style={{ ...styles.card, marginBottom: 12 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+                <div style={{ fontSize: 12, color: COLORS.muted, textTransform: "uppercase", letterSpacing: 0.5 }}>Post {i + 1} · {platform}</div>
+                <Button ghost onClick={() => exportOneCSV(text)}>Download CSV</Button>
+              </div>
+              <div style={{ whiteSpace: "pre-wrap", fontSize: 14, lineHeight: 1.6 }}>{text}</div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
