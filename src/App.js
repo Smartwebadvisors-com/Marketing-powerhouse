@@ -24,6 +24,7 @@ const SECTIONS = [
   { id: "generator", label: "Generator", icon: "✦", group: "Create" },
   { id: "bulk", label: "Bulk Generate", icon: "⎘", group: "Create" },
   { id: "campaign", label: "Campaign Builder", icon: "◈", group: "Create" },
+  { id: "blog", label: "Blog Studio", icon: "📝", group: "Create" },
   { id: "quality", label: "Quality Score", icon: "★", group: "Analyze" },
   { id: "predictor", label: "Performance Predictor", icon: "↗", group: "Analyze" },
   { id: "abtester", label: "A/B Tester", icon: "⇄", group: "Analyze" },
@@ -1636,6 +1637,776 @@ ${samples}`;
   );
 }
 
+// ============ BLOG STUDIO ============
+
+const BLOG_TONES = ["Professional", "Conversational", "Educational", "Authoritative", "Friendly"];
+const BLOG_TYPES = ["How-To Guide", "Listicle", "Opinion", "Case Study", "Educational", "SEO-Focused"];
+const BLOG_LENGTHS = [
+  { label: "Short (500 words)", words: 500 },
+  { label: "Medium (1000 words)", words: 1000 },
+  { label: "Long (2000 words)", words: 2000 },
+];
+const BLOG_STATUSES = ["Idea", "Outline", "Draft", "Review", "Published"];
+const BLOG_SOCIAL_PLATFORMS = [
+  { key: "INSTAGRAM", label: "Instagram", csv: "Instagram" },
+  { key: "LINKEDIN", label: "LinkedIn", csv: "LinkedIn" },
+  { key: "TWITTER", label: "X/Twitter Thread", csv: "X/Twitter" },
+  { key: "FACEBOOK", label: "Facebook", csv: "Facebook" },
+  { key: "TIKTOK", label: "TikTok Hook", csv: "TikTok" },
+  { key: "YOUTUBE", label: "YouTube Shorts", csv: "YouTube Shorts" },
+  { key: "THREADS", label: "Threads", csv: "Threads" },
+  { key: "PINTEREST", label: "Pinterest", csv: "Pinterest" },
+];
+
+function extractTag(text, tag) {
+  if (!text) return "";
+  const re = new RegExp(`\\[${tag}\\]([\\s\\S]*?)\\[\\/${tag}\\]`);
+  const m = text.match(re);
+  return m ? m[1].trim() : "";
+}
+
+function blogStatusColor(s) {
+  if (s === "Published") return COLORS.good;
+  if (s === "Draft") return COLORS.teal;
+  if (s === "Review") return COLORS.danger;
+  if (s === "Outline") return COLORS.warn;
+  return COLORS.muted;
+}
+
+function downloadTXT(filename, content) {
+  const blob = new Blob([content], { type: "text/plain;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function copyToClipboard(text) {
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    return navigator.clipboard.writeText(text);
+  }
+  const ta = document.createElement("textarea");
+  ta.value = text;
+  ta.style.position = "fixed";
+  ta.style.opacity = "0";
+  document.body.appendChild(ta);
+  ta.select();
+  try { document.execCommand("copy"); } catch {}
+  document.body.removeChild(ta);
+  return Promise.resolve();
+}
+
+function BlogGeneratorTab({ apiKey, activeClient, blogs, setBlogs, onBlogGenerated }) {
+  const [topic, setTopic] = useState("");
+  const [keyword, setKeyword] = useState("");
+  const [audience, setAudience] = useState(activeClient?.targetAudience || "");
+  const [business, setBusiness] = useState(activeClient?.businessName || "");
+  const [tone, setTone] = useState("Professional");
+  const [blogType, setBlogType] = useState("How-To Guide");
+  const [lengthLabel, setLengthLabel] = useState(BLOG_LENGTHS[1].label);
+  const [raw, setRaw] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState("");
+  const [msg, setMsg] = useState("");
+
+  useEffect(() => {
+    if (activeClient) {
+      setBusiness((b) => b || activeClient.businessName || "");
+      setAudience((a) => a || activeClient.targetAudience || "");
+    }
+  }, [activeClient]);
+
+  const lengthWords = (BLOG_LENGTHS.find((l) => l.label === lengthLabel) || BLOG_LENGTHS[1]).words;
+
+  const run = async () => {
+    setLoading(true);
+    setErr("");
+    setRaw("");
+    try {
+      const sys = `You are an expert blog writer and SEO strategist for ${business || "a leading brand"}. Write in a ${tone} tone.`;
+      const prompt = `Write a complete, polished ${blogType} blog post.
+
+Topic: ${topic}
+Target Keyword: ${keyword}
+Audience: ${audience}
+Business: ${business}
+Approximate length: ${lengthWords} words
+
+Structure the post with:
+- A single H1 title using "# "
+- An engaging intro paragraph (hook + promise)
+- Multiple H2 sections using "## " with substantive body content
+- A clear conclusion
+- A persuasive call-to-action paragraph at the end
+
+After the blog, return SEO metadata using these EXACT markers:
+
+[META_TITLE]
+SEO meta title (max 60 characters, includes the target keyword)
+[/META_TITLE]
+
+[META_DESCRIPTION]
+SEO meta description (max 155 characters, compelling, includes the keyword)
+[/META_DESCRIPTION]
+
+[TAGS]
+exactly 5 comma-separated tags relevant for content tagging and search
+[/TAGS]
+
+Return ONLY the blog (in markdown) followed by the three tagged metadata blocks. No preamble.`;
+      const txt = await callClaude(apiKey, sys, prompt, 6000);
+      setRaw(txt);
+      const blog = txt.split(/\[META_TITLE\]/)[0].trim();
+      if (onBlogGenerated && blog) onBlogGenerated(blog);
+    } catch (e) {
+      setErr(e.message);
+    }
+    setLoading(false);
+  };
+
+  const blogPart = raw ? raw.split(/\[META_TITLE\]/)[0].trim() : "";
+  const metaTitle = extractTag(raw, "META_TITLE");
+  const metaDesc = extractTag(raw, "META_DESCRIPTION");
+  const tags = extractTag(raw, "TAGS");
+
+  const flash = (m) => { setMsg(m); setTimeout(() => setMsg(""), 1500); };
+
+  const copyFull = async () => { await copyToClipboard(blogPart); flash("Blog post copied"); };
+  const copyMeta = async () => {
+    await copyToClipboard(`Meta Title: ${metaTitle}\nMeta Description: ${metaDesc}\nTags: ${tags}`);
+    flash("Meta copied");
+  };
+
+  const saveBlog = () => {
+    if (!blogPart) return;
+    const titleMatch = blogPart.match(/^#\s+(.+)$/m);
+    setBlogs([
+      ...blogs,
+      {
+        id: uid(),
+        type: "blog",
+        title: titleMatch ? titleMatch[1] : (topic || "Untitled"),
+        content: blogPart,
+        metaTitle,
+        metaDescription: metaDesc,
+        tags,
+        topic,
+        keyword,
+        audience,
+        business,
+        tone,
+        blogType,
+        length: lengthLabel,
+        clientId: activeClient?.id || null,
+        savedAt: new Date().toISOString(),
+      },
+    ]);
+    flash("Saved to library");
+  };
+
+  const downloadTxt = () => {
+    if (!blogPart) return;
+    const safe = (topic || "blog").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "blog";
+    downloadTXT(
+      `${safe}-${new Date().toISOString().slice(0, 10)}.txt`,
+      `${blogPart}\n\n---\nMeta Title: ${metaTitle}\nMeta Description: ${metaDesc}\nTags: ${tags}\n`
+    );
+  };
+
+  return (
+    <div>
+      <div style={styles.card}>
+        <div style={styles.row}>
+          <Field label="Topic">
+            <input style={styles.input} value={topic} onChange={(e) => setTopic(e.target.value)} placeholder="e.g. the founder's guide to retention" />
+          </Field>
+          <Field label="Target Keyword">
+            <input style={styles.input} value={keyword} onChange={(e) => setKeyword(e.target.value)} placeholder="e.g. customer retention strategies" />
+          </Field>
+        </div>
+        <div style={styles.row}>
+          <Field label="Audience">
+            <input style={styles.input} value={audience} onChange={(e) => setAudience(e.target.value)} placeholder="e.g. B2B founders, 30-50" />
+          </Field>
+          <Field label="Business Name">
+            <input style={styles.input} value={business} onChange={(e) => setBusiness(e.target.value)} placeholder="Acme Inc." />
+          </Field>
+        </div>
+        <div style={styles.row}>
+          <Field label="Tone"><Select value={tone} onChange={setTone} options={BLOG_TONES} /></Field>
+          <Field label="Blog Type"><Select value={blogType} onChange={setBlogType} options={BLOG_TYPES} /></Field>
+        </div>
+        <Field label="Length"><Select value={lengthLabel} onChange={setLengthLabel} options={BLOG_LENGTHS.map((l) => l.label)} /></Field>
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+          <Button onClick={run} loading={loading}>Generate Blog Post</Button>
+          {blogPart && !loading && <Button ghost onClick={run}>Regenerate</Button>}
+        </div>
+        {err && <div style={{ color: COLORS.danger, marginTop: 12, fontSize: 13 }}>{err}</div>}
+      </div>
+
+      {loading && <Output loading={true} />}
+
+      {!loading && blogPart && (
+        <>
+          <div style={styles.card}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, flexWrap: "wrap", gap: 10 }}>
+              <h3 style={{ margin: 0 }}>Blog Post</h3>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                <Button ghost onClick={copyFull}>Copy Full Post</Button>
+                <Button ghost onClick={saveBlog}>Save to Library</Button>
+                <Button ghost onClick={downloadTxt}>Download as TXT</Button>
+              </div>
+            </div>
+            <div style={styles.output}>{blogPart}</div>
+          </div>
+
+          {(metaTitle || metaDesc || tags) && (
+            <div style={styles.card}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, flexWrap: "wrap", gap: 10 }}>
+                <h3 style={{ margin: 0 }}>SEO Metadata</h3>
+                <Button ghost onClick={copyMeta}>Copy Meta</Button>
+              </div>
+              <Field label="Meta Title">
+                <div style={{ ...styles.output, maxHeight: "none", padding: 12 }}>{metaTitle || "—"}</div>
+              </Field>
+              <Field label="Meta Description">
+                <div style={{ ...styles.output, maxHeight: "none", padding: 12 }}>{metaDesc || "—"}</div>
+              </Field>
+              <Field label="Suggested Tags">
+                {tags ? (
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                    {tags.split(",").map((t, i) => (
+                      <span key={i} style={styles.pill}>{t.trim()}</span>
+                    ))}
+                  </div>
+                ) : (
+                  <div style={{ color: COLORS.muted, fontSize: 13 }}>—</div>
+                )}
+              </Field>
+            </div>
+          )}
+
+          {msg && <div style={{ color: COLORS.teal, fontSize: 12 }}>{msg}</div>}
+        </>
+      )}
+    </div>
+  );
+}
+
+function BlogToSocialTab({ apiKey, lastBlog, library, setLibrary }) {
+  const [content, setContent] = useState("");
+  const [raw, setRaw] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState("");
+  const [msg, setMsg] = useState("");
+
+  const flash = (m) => { setMsg(m); setTimeout(() => setMsg(""), 1500); };
+
+  const useLast = () => {
+    if (lastBlog) setContent(lastBlog);
+  };
+
+  const run = async () => {
+    if (!content.trim()) {
+      setErr("Paste a blog post or click 'Use Last Generated Blog'.");
+      return;
+    }
+    setLoading(true);
+    setErr("");
+    setRaw("");
+    try {
+      const sys = "You are an expert social media copywriter. Convert long-form content into platform-native posts that respect each platform's voice, length, and conventions.";
+      const prompt = `Given the blog post below, create platform-specific social posts.
+
+Use EXACTLY these markers (nothing outside them):
+
+[INSTAGRAM]
+A polished Instagram caption with a strong opening hook, key takeaways, and 8-12 relevant hashtags at the end.
+[/INSTAGRAM]
+
+[LINKEDIN]
+A LinkedIn post (180-250 words) for professionals, with clean line breaks and a thoughtful CTA.
+[/LINKEDIN]
+
+[TWITTER]
+An X/Twitter thread of exactly 5 numbered tweets ("1/5" through "5/5"). Each under 280 characters. Hook → 3 insights → CTA.
+[/TWITTER]
+
+[FACEBOOK]
+A Facebook post (100-180 words) — conversational, easy to read, with one clear CTA.
+[/FACEBOOK]
+
+[TIKTOK]
+A TikTok video script. Start with a 3-second punchy hook, then 3 short scene beats, then a call-to-engage.
+[/TIKTOK]
+
+[YOUTUBE]
+A YouTube Shorts concept: title, 30-45 second script with on-screen text cues and a hook in the first 2 seconds.
+[/YOUTUBE]
+
+[THREADS]
+A Threads post (250-400 chars) — casual, conversational, ends with a question to drive replies.
+[/THREADS]
+
+[PINTEREST]
+A Pinterest description (max 500 chars) optimized for search — keyword-rich, descriptive, no hashtags.
+[/PINTEREST]
+
+BLOG:
+${content}`;
+      const txt = await callClaude(apiKey, sys, prompt, 5000);
+      setRaw(txt);
+    } catch (e) {
+      setErr(e.message);
+    }
+    setLoading(false);
+  };
+
+  const parsed = BLOG_SOCIAL_PLATFORMS.map((p) => ({ ...p, text: extractTag(raw, p.key) }));
+  const hasAny = parsed.some((p) => p.text);
+
+  const copyOne = async (p) => { await copyToClipboard(p.text); flash(`${p.label} copied`); };
+
+  const saveOne = (p) => {
+    if (!p.text) return;
+    setLibrary([
+      ...library,
+      {
+        platform: p.csv,
+        text: p.text,
+        topic: "From blog post",
+        savedAt: new Date().toISOString(),
+      },
+    ]);
+    flash(`${p.label} saved`);
+  };
+
+  const exportAllCSV = () => {
+    const rows = parsed.filter((p) => p.text).map((p) => [p.text, p.csv, "", "", "Draft"]);
+    if (!rows.length) return;
+    downloadCSV(
+      `blog-to-social-${new Date().toISOString().slice(0, 10)}.csv`,
+      ["Post Content", "Platform", "Scheduled Date", "Scheduled Time", "Status"],
+      rows
+    );
+  };
+
+  return (
+    <div>
+      <div style={styles.card}>
+        <Field label="Blog content">
+          <textarea
+            style={{ ...styles.textarea, minHeight: 180 }}
+            value={content}
+            onChange={(e) => setContent(e.target.value)}
+            placeholder="Paste a blog post here, or click 'Use Last Generated Blog'."
+          />
+        </Field>
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+          <Button onClick={run} loading={loading}>Generate Social Posts</Button>
+          {lastBlog && <Button ghost onClick={useLast}>Use Last Generated Blog</Button>}
+        </div>
+        {err && <div style={{ color: COLORS.danger, marginTop: 12, fontSize: 13 }}>{err}</div>}
+      </div>
+
+      {loading && <Output loading={true} />}
+
+      {!loading && hasAny && (
+        <>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, flexWrap: "wrap", gap: 10 }}>
+            <div style={{ fontSize: 13, color: COLORS.muted }}>
+              {parsed.filter((p) => p.text).length} platforms generated
+            </div>
+            <Button ghost onClick={exportAllCSV}>Download All as CSV</Button>
+          </div>
+          {parsed.map((p) => p.text && (
+            <div key={p.key} style={styles.card}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, gap: 10, flexWrap: "wrap" }}>
+                <span style={styles.pill}>{p.label}</span>
+                <div style={{ display: "flex", gap: 8 }}>
+                  <button style={{ ...styles.btnGhost, padding: "6px 12px", fontSize: 12 }} onClick={() => copyOne(p)}>Copy</button>
+                  <button style={{ ...styles.btnGhost, padding: "6px 12px", fontSize: 12 }} onClick={() => saveOne(p)}>Save</button>
+                </div>
+              </div>
+              <div style={{ whiteSpace: "pre-wrap", fontSize: 13.5, lineHeight: 1.6 }}>{p.text}</div>
+            </div>
+          ))}
+          {msg && <div style={{ color: COLORS.teal, fontSize: 12 }}>{msg}</div>}
+        </>
+      )}
+    </div>
+  );
+}
+
+function SEOBriefTab({ apiKey, activeClient, blogs, setBlogs }) {
+  const [keyword, setKeyword] = useState("");
+  const [industry, setIndustry] = useState(activeClient?.industry || "");
+  const [audience, setAudience] = useState(activeClient?.targetAudience || "");
+  const [competitor, setCompetitor] = useState("");
+  const [out, setOut] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState("");
+  const [msg, setMsg] = useState("");
+
+  const flash = (m) => { setMsg(m); setTimeout(() => setMsg(""), 1500); };
+
+  const run = async () => {
+    setLoading(true);
+    setErr("");
+    try {
+      const sys = "You are an SEO content strategist. Produce briefs that are specific, search-aligned, and immediately actionable for writers.";
+      const prompt = `Create a complete SEO content brief for the target keyword below.
+
+Target Keyword: ${keyword}
+Industry: ${industry}
+Audience: ${audience}
+${competitor ? `Competitor URL to consider: ${competitor}` : ""}
+
+Deliver the brief with these sections (use clear bold headings):
+
+1. SEARCH INTENT
+   - Primary intent (informational / commercial / transactional / navigational) with reasoning
+   - What the user is really trying to accomplish
+
+2. RECOMMENDED H1
+   - One strong H1 title
+
+3. SUGGESTED H2 HEADINGS (exactly 8)
+   - Numbered list of H2 section headings that fully cover the topic
+
+4. RELATED KEYWORDS
+   - 10-15 related / LSI keywords as a comma-separated list
+
+5. RECOMMENDED WORD COUNT
+   - A specific number with rationale
+
+6. CONTENT ANGLE RECOMMENDATIONS
+   - 3-5 unique angles that would outperform generic competitor coverage
+
+7. META TITLE
+   - Under 60 characters
+
+8. META DESCRIPTION
+   - Under 155 characters`;
+      const txt = await callClaude(apiKey, sys, prompt, 3000);
+      setOut(txt);
+    } catch (e) {
+      setErr(e.message);
+    }
+    setLoading(false);
+  };
+
+  const copyBrief = async () => { await copyToClipboard(out); flash("SEO brief copied"); };
+
+  const saveBrief = () => {
+    if (!out) return;
+    setBlogs([
+      ...blogs,
+      {
+        id: uid(),
+        type: "seo_brief",
+        keyword,
+        industry,
+        audience,
+        competitor,
+        content: out,
+        clientId: activeClient?.id || null,
+        savedAt: new Date().toISOString(),
+      },
+    ]);
+    flash("Brief saved");
+  };
+
+  return (
+    <div>
+      <div style={styles.card}>
+        <div style={styles.row}>
+          <Field label="Target Keyword">
+            <input style={styles.input} value={keyword} onChange={(e) => setKeyword(e.target.value)} placeholder="e.g. customer retention strategies" />
+          </Field>
+          <Field label="Industry">
+            <input style={styles.input} value={industry} onChange={(e) => setIndustry(e.target.value)} placeholder="e.g. B2B SaaS" />
+          </Field>
+        </div>
+        <div style={styles.row}>
+          <Field label="Audience">
+            <input style={styles.input} value={audience} onChange={(e) => setAudience(e.target.value)} placeholder="e.g. founders and growth leads" />
+          </Field>
+          <Field label="Competitor URL (optional)">
+            <input style={styles.input} value={competitor} onChange={(e) => setCompetitor(e.target.value)} placeholder="https://competitor.com/post" />
+          </Field>
+        </div>
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+          <Button onClick={run} loading={loading}>Generate SEO Brief</Button>
+          {out && !loading && <Button ghost onClick={copyBrief}>Copy</Button>}
+          {out && !loading && <Button ghost onClick={saveBrief}>Save</Button>}
+        </div>
+        {err && <div style={{ color: COLORS.danger, marginTop: 12, fontSize: 13 }}>{err}</div>}
+        {msg && <div style={{ color: COLORS.teal, marginTop: 10, fontSize: 12 }}>{msg}</div>}
+      </div>
+      <Output text={out} loading={loading} />
+    </div>
+  );
+}
+
+function BlogCalendarTab({ clients, activeClient, blogCalendar, setBlogCalendar }) {
+  const [showForm, setShowForm] = useState(false);
+  const [month, setMonth] = useState(() => new Date().toISOString().slice(0, 7));
+  const [clientFilter, setClientFilter] = useState(activeClient?.id || "all");
+
+  const [title, setTitle] = useState("");
+  const [keyword, setKeyword] = useState("");
+  const [formClientId, setFormClientId] = useState(activeClient?.id || (clients[0]?.id || ""));
+  const [status, setStatus] = useState("Idea");
+  const [date, setDate] = useState("");
+
+  const reset = () => { setTitle(""); setKeyword(""); setStatus("Idea"); setDate(""); };
+
+  const add = () => {
+    if (!title.trim() || !date) return;
+    setBlogCalendar([
+      ...blogCalendar,
+      { id: uid(), title: title.trim(), keyword: keyword.trim(), clientId: formClientId || null, status, date, createdAt: new Date().toISOString() },
+    ]);
+    reset();
+    setShowForm(false);
+  };
+
+  const remove = (id) => setBlogCalendar(blogCalendar.filter((e) => e.id !== id));
+  const updateStatus = (id, s) => setBlogCalendar(blogCalendar.map((e) => (e.id === id ? { ...e, status: s } : e)));
+
+  const clientName = (id) => clients.find((c) => c.id === id)?.businessName || "—";
+
+  const filtered = blogCalendar
+    .filter((e) => (month ? (e.date || "").startsWith(month) : true))
+    .filter((e) => (clientFilter === "all" ? true : e.clientId === clientFilter));
+
+  const grouped = filtered.reduce((acc, e) => {
+    (acc[e.date] = acc[e.date] || []).push(e);
+    return acc;
+  }, {});
+  const sortedDates = Object.keys(grouped).sort();
+
+  const exportCSV = () => {
+    if (!filtered.length) return;
+    const rows = filtered
+      .slice()
+      .sort((a, b) => (a.date || "").localeCompare(b.date || ""))
+      .map((e) => [e.title, e.keyword || "", clientName(e.clientId), e.status, e.date]);
+    downloadCSV(
+      `blog-calendar-${month || "all"}.csv`,
+      ["Title", "Target Keyword", "Client", "Status", "Scheduled Date"],
+      rows
+    );
+  };
+
+  return (
+    <div>
+      <div style={styles.card}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 12, marginBottom: 14 }}>
+          <h3 style={{ margin: 0 }}>Editorial Calendar</h3>
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+            <Button onClick={() => setShowForm((v) => !v)}>{showForm ? "Close" : "+ Add Blog Topic"}</Button>
+            <Button ghost onClick={exportCSV} style={{ opacity: filtered.length ? 1 : 0.5 }}>Export to CSV</Button>
+          </div>
+        </div>
+
+        {showForm && (
+          <div style={{ background: COLORS.cardAlt, padding: 16, borderRadius: 8, marginBottom: 16 }}>
+            <div style={styles.row}>
+              <Field label="Title">
+                <input style={styles.input} value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Blog post title" />
+              </Field>
+              <Field label="Target Keyword">
+                <input style={styles.input} value={keyword} onChange={(e) => setKeyword(e.target.value)} placeholder="primary keyword" />
+              </Field>
+            </div>
+            <div style={styles.row}>
+              <Field label="Client">
+                <select
+                  style={styles.input}
+                  value={formClientId}
+                  onChange={(e) => setFormClientId(e.target.value)}
+                >
+                  {clients.length === 0 && <option value="">(no clients yet)</option>}
+                  {clients.map((c) => (
+                    <option key={c.id} value={c.id}>{c.businessName}</option>
+                  ))}
+                </select>
+              </Field>
+              <Field label="Status">
+                <Select value={status} onChange={setStatus} options={BLOG_STATUSES} />
+              </Field>
+            </div>
+            <Field label="Scheduled Date">
+              <input style={styles.input} type="date" value={date} onChange={(e) => setDate(e.target.value)} />
+            </Field>
+            <div style={{ display: "flex", gap: 10 }}>
+              <Button onClick={add}>Save Topic</Button>
+              <Button ghost onClick={() => { reset(); setShowForm(false); }}>Cancel</Button>
+            </div>
+          </div>
+        )}
+
+        <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+          <input style={{ ...styles.input, width: 180 }} type="month" value={month} onChange={(e) => setMonth(e.target.value)} />
+          {month && <button style={{ ...styles.btnGhost, padding: "6px 10px", fontSize: 11 }} onClick={() => setMonth("")}>All months</button>}
+          <select
+            style={{ ...styles.input, width: 220 }}
+            value={clientFilter}
+            onChange={(e) => setClientFilter(e.target.value)}
+          >
+            <option value="all">All clients</option>
+            {clients.map((c) => (
+              <option key={c.id} value={c.id}>{c.businessName}</option>
+            ))}
+          </select>
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginLeft: "auto" }}>
+            {BLOG_STATUSES.map((s) => (
+              <span key={s} style={{ ...styles.pill, background: `${blogStatusColor(s)}22`, color: blogStatusColor(s) }}>{s}</span>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <div style={styles.card}>
+        <h3 style={{ marginTop: 0 }}>
+          {month || "All months"} ({filtered.length})
+        </h3>
+        {sortedDates.length === 0 ? (
+          <div style={{ color: COLORS.muted, fontSize: 13 }}>No blog topics planned. Click "+ Add Blog Topic" to get started.</div>
+        ) : (
+          sortedDates.map((d) => (
+            <div key={d} style={{ marginBottom: 16 }}>
+              <div style={{ color: COLORS.teal, fontSize: 12, fontWeight: 700, textTransform: "uppercase", letterSpacing: 1, marginBottom: 8 }}>{d}</div>
+              {grouped[d].map((e) => (
+                <div
+                  key={e.id}
+                  style={{
+                    background: COLORS.cardAlt,
+                    padding: 14,
+                    borderRadius: 8,
+                    marginBottom: 8,
+                    borderLeft: `3px solid ${blogStatusColor(e.status)}`,
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "flex-start",
+                    gap: 12,
+                  }}
+                >
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6, flexWrap: "wrap" }}>
+                      <span style={{ ...styles.pill, background: `${blogStatusColor(e.status)}22`, color: blogStatusColor(e.status) }}>{e.status}</span>
+                      <span style={{ fontSize: 12, color: COLORS.muted }}>{clientName(e.clientId)}</span>
+                    </div>
+                    <div style={{ fontSize: 14, fontWeight: 600, color: COLORS.white }}>{e.title}</div>
+                    {e.keyword && <div style={{ fontSize: 12, color: COLORS.muted, marginTop: 4 }}>Keyword: {e.keyword}</div>}
+                  </div>
+                  <div style={{ display: "flex", gap: 6, alignItems: "center", flexShrink: 0 }}>
+                    <select
+                      style={{ ...styles.input, width: 130, padding: "6px 10px", fontSize: 12 }}
+                      value={e.status}
+                      onChange={(ev) => updateStatus(e.id, ev.target.value)}
+                    >
+                      {BLOG_STATUSES.map((s) => (
+                        <option key={s} value={s}>{s}</option>
+                      ))}
+                    </select>
+                    <button style={{ ...styles.btnGhost, padding: "6px 10px", fontSize: 11 }} onClick={() => remove(e.id)}>×</button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ))
+        )}
+      </div>
+    </div>
+  );
+}
+
+function BlogStudio({ apiKey, activeClient, clients, blogs, setBlogs, library, setLibrary, blogCalendar, setBlogCalendar }) {
+  const [tab, setTab] = useState("generator");
+  const [lastBlog, setLastBlog] = useState(() => {
+    const lastSaved = [...blogs].reverse().find((b) => b.type === "blog");
+    return lastSaved?.content || "";
+  });
+
+  const tabs = [
+    { id: "generator", label: "Blog Generator" },
+    { id: "social", label: "Blog to Social" },
+    { id: "seo", label: "SEO Brief" },
+    { id: "calendar", label: "Blog Calendar" },
+  ];
+
+  return (
+    <div>
+      <SectionHeader
+        title="Blog Studio"
+        subtitle="Long-form content, social distribution, SEO briefs, and an editorial calendar."
+      />
+      <div style={{ display: "flex", gap: 4, borderBottom: `1px solid ${COLORS.border}`, marginBottom: 20, flexWrap: "wrap" }}>
+        {tabs.map((t) => (
+          <button
+            key={t.id}
+            onClick={() => setTab(t.id)}
+            style={{
+              background: "transparent",
+              border: "none",
+              color: tab === t.id ? COLORS.teal : COLORS.white,
+              padding: "10px 16px",
+              cursor: "pointer",
+              fontSize: 13,
+              fontWeight: 600,
+              borderBottom: tab === t.id ? `2px solid ${COLORS.teal}` : "2px solid transparent",
+              marginBottom: -1,
+            }}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {tab === "generator" && (
+        <BlogGeneratorTab
+          apiKey={apiKey}
+          activeClient={activeClient}
+          blogs={blogs}
+          setBlogs={setBlogs}
+          onBlogGenerated={setLastBlog}
+        />
+      )}
+      {tab === "social" && (
+        <BlogToSocialTab
+          apiKey={apiKey}
+          lastBlog={lastBlog}
+          library={library}
+          setLibrary={setLibrary}
+        />
+      )}
+      {tab === "seo" && (
+        <SEOBriefTab
+          apiKey={apiKey}
+          activeClient={activeClient}
+          blogs={blogs}
+          setBlogs={setBlogs}
+        />
+      )}
+      {tab === "calendar" && (
+        <BlogCalendarTab
+          clients={clients}
+          activeClient={activeClient}
+          blogCalendar={blogCalendar}
+          setBlogCalendar={setBlogCalendar}
+        />
+      )}
+    </div>
+  );
+}
+
 // ============ CLIENTS ============
 
 const EMPTY_CLIENT = {
@@ -1952,6 +2723,8 @@ export default function App() {
   const [tracking, setTracking] = useLocalState("mp.tracking", []);
   const [templates, setTemplates] = useLocalState("mp.templates", DEFAULT_TEMPLATES);
   const [voice, setVoice] = useLocalState("mp.voice", { samples: "", profile: "" });
+  const [blogs, setBlogs] = useLocalState("mp.blogs", []);
+  const [blogCalendar, setBlogCalendar] = useLocalState("mp.blogCalendar", []);
 
   const activeClient = useMemo(
     () => clients.find((c) => c.id === activeClientId) || null,
@@ -1991,6 +2764,7 @@ export default function App() {
       case "generator": return <Generator apiKey={apiKey} brief={brief} library={library} setLibrary={wrappedSetLibrary} />;
       case "bulk": return <BulkGenerate apiKey={apiKey} brief={brief} library={library} setLibrary={wrappedSetLibrary} />;
       case "campaign": return <CampaignBuilder apiKey={apiKey} brief={brief} />;
+      case "blog": return <BlogStudio apiKey={apiKey} activeClient={activeClient} clients={clients} blogs={blogs} setBlogs={setBlogs} library={library} setLibrary={wrappedSetLibrary} blogCalendar={blogCalendar} setBlogCalendar={setBlogCalendar} />;
       case "quality": return <QualityScore apiKey={apiKey} />;
       case "predictor": return <PerformancePredictor apiKey={apiKey} />;
       case "abtester": return <ABTester apiKey={apiKey} />;
