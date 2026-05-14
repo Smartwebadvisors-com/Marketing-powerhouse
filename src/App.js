@@ -1808,13 +1808,51 @@ Return ONLY the blog (in markdown) followed by the three tagged metadata blocks.
     flash("Saved to library");
   };
 
+  const safeSlug = () => (topic || "blog").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "blog";
+  const today = () => new Date().toISOString().slice(0, 10);
+
   const downloadTxt = () => {
     if (!blogPart) return;
-    const safe = (topic || "blog").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "blog";
-    downloadTXT(
-      `${safe}-${new Date().toISOString().slice(0, 10)}.txt`,
-      `${blogPart}\n\n---\nMeta Title: ${metaTitle}\nMeta Description: ${metaDesc}\nTags: ${tags}\n`
-    );
+    downloadTXT(`${safeSlug()}-${today()}.txt`, blogPart);
+  };
+
+  const downloadDocxReady = () => {
+    if (!blogPart) return;
+    const lines = blogPart.split("\n");
+    const formatted = [];
+    for (const line of lines) {
+      const h1 = line.match(/^#\s+(.+)$/);
+      const h2 = line.match(/^##\s+(.+)$/);
+      const h3 = line.match(/^###\s+(.+)$/);
+      if (h1) {
+        formatted.push(h1[1].toUpperCase());
+        formatted.push("=".repeat(Math.min(h1[1].length, 80)));
+      } else if (h2) {
+        formatted.push("");
+        formatted.push(h2[1].toUpperCase());
+        formatted.push("-".repeat(Math.min(h2[1].length, 80)));
+      } else if (h3) {
+        formatted.push("");
+        formatted.push(h3[1]);
+        formatted.push("");
+      } else {
+        const cleaned = line
+          .replace(/\*\*(.+?)\*\*/g, "$1")
+          .replace(/__(.+?)__/g, "$1")
+          .replace(/\*(.+?)\*/g, "$1")
+          .replace(/_(.+?)_/g, "$1")
+          .replace(/`(.+?)`/g, "$1")
+          .replace(/^\s*[-*]\s+/, "• ");
+        formatted.push(cleaned);
+      }
+    }
+    downloadTXT(`${safeSlug()}-${today()}-docx.txt`, formatted.join("\n"));
+  };
+
+  const downloadMetaTxt = () => {
+    if (!metaTitle && !metaDesc && !tags) return;
+    const body = `Meta Title: ${metaTitle || ""}\nMeta Description: ${metaDesc || ""}\nTags: ${tags || ""}\n`;
+    downloadTXT(`${safeSlug()}-${today()}-meta.txt`, body);
   };
 
   return (
@@ -1859,6 +1897,7 @@ Return ONLY the blog (in markdown) followed by the three tagged metadata blocks.
                 <Button ghost onClick={copyFull}>Copy Full Post</Button>
                 <Button ghost onClick={saveBlog}>Save to Library</Button>
                 <Button ghost onClick={downloadTxt}>Download as TXT</Button>
+                <Button ghost onClick={downloadDocxReady}>Download as DOCX-ready TXT</Button>
               </div>
             </div>
             <div style={styles.output}>{blogPart}</div>
@@ -1868,7 +1907,10 @@ Return ONLY the blog (in markdown) followed by the three tagged metadata blocks.
             <div style={styles.card}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, flexWrap: "wrap", gap: 10 }}>
                 <h3 style={{ margin: 0 }}>SEO Metadata</h3>
-                <Button ghost onClick={copyMeta}>Copy Meta</Button>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  <Button ghost onClick={copyMeta}>Copy Meta</Button>
+                  <Button ghost onClick={downloadMetaTxt}>Download Meta as TXT</Button>
+                </div>
               </div>
               <Field label="Meta Title">
                 <div style={{ ...styles.output, maxHeight: "none", padding: 12 }}>{metaTitle || "—"}</div>
@@ -1989,10 +2031,16 @@ ${content}`;
     const rows = parsed.filter((p) => p.text).map((p) => [p.text, p.csv, "", "", "Draft"]);
     if (!rows.length) return;
     downloadCSV(
-      `blog-to-social-${new Date().toISOString().slice(0, 10)}.csv`,
+      `ghl-blog-social-${new Date().toISOString().slice(0, 10)}.csv`,
       ["Post Content", "Platform", "Scheduled Date", "Scheduled Time", "Status"],
       rows
     );
+  };
+
+  const downloadOne = (p) => {
+    if (!p.text) return;
+    const slug = p.label.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+    downloadTXT(`${slug}-${new Date().toISOString().slice(0, 10)}.txt`, p.text);
   };
 
   return (
@@ -2030,6 +2078,7 @@ ${content}`;
                 <div style={{ display: "flex", gap: 8 }}>
                   <button style={{ ...styles.btnGhost, padding: "6px 12px", fontSize: 12 }} onClick={() => copyOne(p)}>Copy</button>
                   <button style={{ ...styles.btnGhost, padding: "6px 12px", fontSize: 12 }} onClick={() => saveOne(p)}>Save</button>
+                  <button style={{ ...styles.btnGhost, padding: "6px 12px", fontSize: 12 }} onClick={() => downloadOne(p)}>Download</button>
                 </div>
               </div>
               <div style={{ whiteSpace: "pre-wrap", fontSize: 13.5, lineHeight: 1.6 }}>{p.text}</div>
@@ -2102,6 +2151,12 @@ Deliver the brief with these sections (use clear bold headings):
 
   const copyBrief = async () => { await copyToClipboard(out); flash("SEO brief copied"); };
 
+  const downloadBrief = () => {
+    if (!out) return;
+    const safe = (keyword || "seo-brief").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "seo-brief";
+    downloadTXT(`${safe}-brief-${new Date().toISOString().slice(0, 10)}.txt`, out);
+  };
+
   const saveBrief = () => {
     if (!out) return;
     setBlogs([
@@ -2144,6 +2199,7 @@ Deliver the brief with these sections (use clear bold headings):
           <Button onClick={run} loading={loading}>Generate SEO Brief</Button>
           {out && !loading && <Button ghost onClick={copyBrief}>Copy</Button>}
           {out && !loading && <Button ghost onClick={saveBrief}>Save</Button>}
+          {out && !loading && <Button ghost onClick={downloadBrief}>Download Brief as TXT</Button>}
         </div>
         {err && <div style={{ color: COLORS.danger, marginTop: 12, fontSize: 13 }}>{err}</div>}
         {msg && <div style={{ color: COLORS.teal, marginTop: 10, fontSize: 12 }}>{msg}</div>}
@@ -2211,7 +2267,7 @@ function BlogCalendarTab({ clients, activeClient, blogCalendar, setBlogCalendar 
           <h3 style={{ margin: 0 }}>Editorial Calendar</h3>
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
             <Button onClick={() => setShowForm((v) => !v)}>{showForm ? "Close" : "+ Add Blog Topic"}</Button>
-            <Button ghost onClick={exportCSV} style={{ opacity: filtered.length ? 1 : 0.5 }}>Export to CSV</Button>
+            <Button ghost onClick={exportCSV} style={{ opacity: filtered.length ? 1 : 0.5 }}>Export Calendar as CSV</Button>
           </div>
         </div>
 
