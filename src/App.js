@@ -18,6 +18,7 @@ const API_URL = "https://api.anthropic.com/v1/messages";
 const MODEL = "claude-sonnet-4-20250514";
 
 const SECTIONS = [
+  { id: "clients", label: "Clients", icon: "◔", group: "Overview" },
   { id: "dashboard", label: "Dashboard", icon: "▦", group: "Overview" },
   { id: "brief", label: "Content Brief", icon: "✎", group: "Plan" },
   { id: "generator", label: "Generator", icon: "✦", group: "Create" },
@@ -43,6 +44,26 @@ const SECTIONS = [
 ];
 
 const PLATFORMS = ["Instagram", "Facebook", "LinkedIn", "TikTok", "YouTube Shorts", "X/Twitter", "Threads", "Pinterest"];
+
+const BRAND_VOICES = ["Professional", "Witty", "Bold", "Educational", "Inspirational", "Casual", "Authoritative", "Friendly", "Luxury"];
+const GOALS = ["Awareness", "Engagement", "Lead Generation", "Sales", "Retention", "Recruiting", "Community Growth"];
+const INDUSTRIES = ["", "Retail", "SaaS", "Hospitality", "Healthcare", "Real Estate", "Professional Services", "Fitness", "Food & Beverage", "Education", "Finance", "Beauty", "Home Services", "Nonprofit", "Other"];
+
+function uid() {
+  return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+}
+
+function clientToBrief(c) {
+  if (!c) return null;
+  return {
+    brand: c.businessName || "",
+    audience: c.targetAudience || "",
+    objective: c.goal || "Awareness",
+    tone: c.brandVoice || "Professional",
+    keyMessage: c.mainOffer || "",
+    constraints: c.notes || "",
+  };
+}
 
 function loadScript(src) {
   return new Promise((resolve, reject) => {
@@ -1615,10 +1636,304 @@ ${samples}`;
   );
 }
 
+// ============ CLIENTS ============
+
+const EMPTY_CLIENT = {
+  businessName: "",
+  industry: "",
+  location: "",
+  website: "",
+  targetAudience: "",
+  brandVoice: "Professional",
+  goal: "Awareness",
+  platforms: [],
+  mainOffer: "",
+  notes: "",
+};
+
+function ClientForm({ initial, onSave, onCancel }) {
+  const [c, setC] = useState(() => ({ ...EMPTY_CLIENT, ...(initial || {}) }));
+  const set = (k, v) => setC((prev) => ({ ...prev, [k]: v }));
+  const togglePlatform = (p) => {
+    setC((prev) => {
+      const has = prev.platforms.includes(p);
+      return { ...prev, platforms: has ? prev.platforms.filter((x) => x !== p) : [...prev.platforms, p] };
+    });
+  };
+  const submit = () => {
+    if (!c.businessName.trim()) return;
+    onSave(c);
+  };
+
+  return (
+    <div
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(4,10,20,0.78)",
+        zIndex: 50,
+        display: "flex",
+        alignItems: "flex-start",
+        justifyContent: "center",
+        padding: "60px 20px",
+        overflowY: "auto",
+      }}
+      onClick={onCancel}
+    >
+      <div
+        style={{
+          background: COLORS.card,
+          border: `1px solid ${COLORS.border}`,
+          borderRadius: 14,
+          padding: 26,
+          width: "100%",
+          maxWidth: 720,
+        }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 18 }}>
+          <h2 style={{ margin: 0, fontSize: 20 }}>{initial?.id ? "Edit Client" : "Add New Client"}</h2>
+          <button style={{ ...styles.btnGhost, padding: "4px 10px", fontSize: 12 }} onClick={onCancel}>×</button>
+        </div>
+        <div style={styles.row}>
+          <Field label="Business Name *">
+            <input style={styles.input} value={c.businessName} onChange={(e) => set("businessName", e.target.value)} placeholder="Acme Inc." />
+          </Field>
+          <Field label="Industry">
+            <Select value={c.industry} onChange={(v) => set("industry", v)} options={INDUSTRIES} />
+          </Field>
+        </div>
+        <div style={styles.row}>
+          <Field label="Location">
+            <input style={styles.input} value={c.location} onChange={(e) => set("location", e.target.value)} placeholder="Austin, TX" />
+          </Field>
+          <Field label="Website">
+            <input style={styles.input} value={c.website} onChange={(e) => set("website", e.target.value)} placeholder="https://" />
+          </Field>
+        </div>
+        <Field label="Target Audience">
+          <textarea style={{ ...styles.textarea, minHeight: 70 }} value={c.targetAudience} onChange={(e) => set("targetAudience", e.target.value)} placeholder="B2B founders, 30-50, US/EU" />
+        </Field>
+        <div style={styles.row}>
+          <Field label="Brand Voice">
+            <Select value={c.brandVoice} onChange={(v) => set("brandVoice", v)} options={BRAND_VOICES} />
+          </Field>
+          <Field label="Goal">
+            <Select value={c.goal} onChange={(v) => set("goal", v)} options={GOALS} />
+          </Field>
+        </div>
+        <Field label="Platforms">
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+            {PLATFORMS.map((p) => {
+              const checked = c.platforms.includes(p);
+              return (
+                <label
+                  key={p}
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 6,
+                    padding: "6px 12px",
+                    borderRadius: 99,
+                    border: `1px solid ${checked ? COLORS.teal : COLORS.border}`,
+                    background: checked ? "rgba(0,212,176,0.10)" : "transparent",
+                    color: checked ? COLORS.teal : COLORS.white,
+                    fontSize: 12,
+                    cursor: "pointer",
+                  }}
+                >
+                  <input type="checkbox" checked={checked} onChange={() => togglePlatform(p)} style={{ accentColor: COLORS.teal }} />
+                  {p}
+                </label>
+              );
+            })}
+          </div>
+        </Field>
+        <Field label="Main Offer">
+          <textarea style={{ ...styles.textarea, minHeight: 70 }} value={c.mainOffer} onChange={(e) => set("mainOffer", e.target.value)} placeholder="What they sell or the core promise" />
+        </Field>
+        <Field label="Notes">
+          <textarea style={{ ...styles.textarea, minHeight: 70 }} value={c.notes} onChange={(e) => set("notes", e.target.value)} placeholder="Compliance, banned words, mandatories, internal notes..." />
+        </Field>
+        <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 6 }}>
+          <Button ghost onClick={onCancel}>Cancel</Button>
+          <Button onClick={submit}>{initial?.id ? "Save Changes" : "Create Client"}</Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ClientCard({ client, contentCount, onOpen, onEdit, onArchive }) {
+  const updated = client.updatedAt || client.createdAt;
+  return (
+    <div
+      onClick={onOpen}
+      style={{
+        background: COLORS.card,
+        border: `1px solid ${COLORS.border}`,
+        borderRadius: 12,
+        padding: 20,
+        cursor: "pointer",
+        transition: "border-color 0.15s, transform 0.15s",
+        display: "flex",
+        flexDirection: "column",
+        gap: 12,
+      }}
+      onMouseEnter={(e) => { e.currentTarget.style.borderColor = COLORS.teal; }}
+      onMouseLeave={(e) => { e.currentTarget.style.borderColor = COLORS.border; }}
+    >
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontSize: 16, fontWeight: 700, color: COLORS.white, marginBottom: 2 }}>{client.businessName}</div>
+          {client.industry && <div style={{ fontSize: 12, color: COLORS.muted }}>{client.industry}</div>}
+        </div>
+        {client.archived && <span style={{ ...styles.pill, background: "rgba(255,181,71,0.12)", color: COLORS.warn }}>Archived</span>}
+      </div>
+      {client.platforms?.length > 0 && (
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+          {client.platforms.map((p) => (
+            <span key={p} style={{ ...styles.pill, marginRight: 0 }}>{p}</span>
+          ))}
+        </div>
+      )}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, fontSize: 12 }}>
+        <div>
+          <div style={{ color: COLORS.muted, textTransform: "uppercase", letterSpacing: 0.5, fontSize: 10, marginBottom: 2 }}>Voice</div>
+          <div style={{ color: COLORS.white }}>{client.brandVoice || "—"}</div>
+        </div>
+        <div>
+          <div style={{ color: COLORS.muted, textTransform: "uppercase", letterSpacing: 0.5, fontSize: 10, marginBottom: 2 }}>Content</div>
+          <div style={{ color: COLORS.teal, fontWeight: 600 }}>{contentCount} pieces</div>
+        </div>
+      </div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", paddingTop: 8, borderTop: `1px solid ${COLORS.border}` }}>
+        <div style={{ fontSize: 11, color: COLORS.muted }}>
+          Updated {updated ? new Date(updated).toLocaleDateString() : "—"}
+        </div>
+        <div style={{ display: "flex", gap: 6 }} onClick={(e) => e.stopPropagation()}>
+          <button style={{ ...styles.btnGhost, padding: "4px 10px", fontSize: 11 }} onClick={onEdit}>Edit</button>
+          <button style={{ ...styles.btnGhost, padding: "4px 10px", fontSize: 11 }} onClick={onArchive}>
+            {client.archived ? "Restore" : "Archive"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ClientsDashboard({ clients, setClients, library, onOpenClient }) {
+  const [query, setQuery] = useState("");
+  const [showForm, setShowForm] = useState(false);
+  const [editing, setEditing] = useState(null);
+  const [showArchived, setShowArchived] = useState(false);
+
+  const countFor = (id) => library.filter((l) => l.clientId === id).length;
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return clients
+      .filter((c) => showArchived ? c.archived : !c.archived)
+      .filter((c) => {
+        if (!q) return true;
+        return (
+          (c.businessName || "").toLowerCase().includes(q) ||
+          (c.industry || "").toLowerCase().includes(q) ||
+          (c.brandVoice || "").toLowerCase().includes(q) ||
+          (c.platforms || []).some((p) => p.toLowerCase().includes(q))
+        );
+      });
+  }, [clients, query, showArchived]);
+
+  const saveClient = (data) => {
+    const now = new Date().toISOString();
+    if (data.id) {
+      setClients(clients.map((c) => (c.id === data.id ? { ...c, ...data, updatedAt: now } : c)));
+    } else {
+      setClients([...clients, { ...data, id: uid(), createdAt: now, updatedAt: now, archived: false }]);
+    }
+    setShowForm(false);
+    setEditing(null);
+  };
+
+  const toggleArchive = (id) => {
+    setClients(clients.map((c) => (c.id === id ? { ...c, archived: !c.archived, updatedAt: new Date().toISOString() } : c)));
+  };
+
+  const activeCount = clients.filter((c) => !c.archived).length;
+  const archivedCount = clients.filter((c) => c.archived).length;
+  const isEmpty = clients.length === 0;
+
+  return (
+    <div>
+      <SectionHeader
+        title="Clients"
+        subtitle="Every brand you run content for, in one place."
+        actions={<Button onClick={() => { setEditing(null); setShowForm(true); }}>+ Add New Client</Button>}
+      />
+
+      {isEmpty ? (
+        <div style={{ ...styles.card, textAlign: "center", padding: "60px 24px" }}>
+          <div style={{ fontSize: 40, marginBottom: 12, opacity: 0.6 }}>◔</div>
+          <h3 style={{ marginTop: 0, marginBottom: 8 }}>No clients yet</h3>
+          <p style={{ color: COLORS.muted, fontSize: 14, marginBottom: 22, maxWidth: 420, margin: "0 auto 22px" }}>
+            Add your first client to spin up a dedicated content workspace — brief, generator, calendar, and tracking, all scoped to them.
+          </p>
+          <Button onClick={() => { setEditing(null); setShowForm(true); }}>+ Add Your First Client</Button>
+        </div>
+      ) : (
+        <>
+          <div style={{ display: "flex", gap: 10, marginBottom: 18, flexWrap: "wrap", alignItems: "center" }}>
+            <input
+              style={{ ...styles.input, flex: "1 1 240px", maxWidth: 360 }}
+              placeholder="Search clients by name, industry, voice, or platform…"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+            />
+            <button
+              style={{ ...styles.btnGhost, padding: "9px 14px", fontSize: 12 }}
+              onClick={() => setShowArchived((v) => !v)}
+            >
+              {showArchived ? `Active (${activeCount})` : `Archived (${archivedCount})`}
+            </button>
+          </div>
+
+          {filtered.length === 0 ? (
+            <div style={{ ...styles.card, textAlign: "center", color: COLORS.muted, fontSize: 13 }}>
+              No clients match.
+            </div>
+          ) : (
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 16 }}>
+              {filtered.map((c) => (
+                <ClientCard
+                  key={c.id}
+                  client={c}
+                  contentCount={countFor(c.id)}
+                  onOpen={() => onOpenClient(c.id)}
+                  onEdit={() => { setEditing(c); setShowForm(true); }}
+                  onArchive={() => toggleArchive(c.id)}
+                />
+              ))}
+            </div>
+          )}
+        </>
+      )}
+
+      {showForm && (
+        <ClientForm
+          initial={editing}
+          onSave={saveClient}
+          onCancel={() => { setShowForm(false); setEditing(null); }}
+        />
+      )}
+    </div>
+  );
+}
+
 // ============ APP ============
 
 export default function App() {
-  const [active, setActive] = useLocalState("mp.active", "dashboard");
+  const [active, setActive] = useLocalState("mp.active", "clients");
   const [apiKey, setApiKey] = useLocalState("mp.apiKey", "");
   const [showKey, setShowKey] = useState(false);
   const [brief, setBrief] = useLocalState("mp.brief", {
@@ -1629,12 +1944,39 @@ export default function App() {
     keyMessage: "",
     constraints: "",
   });
+  const [clients, setClients] = useLocalState("mp.clients", []);
+  const [activeClientId, setActiveClientId] = useLocalState("mp.activeClientId", "");
   const [library, setLibrary] = useLocalState("mp.library", []);
   const [approvals, setApprovals] = useLocalState("mp.approvals", []);
   const [calendar, setCalendar] = useLocalState("mp.calendar", []);
   const [tracking, setTracking] = useLocalState("mp.tracking", []);
   const [templates, setTemplates] = useLocalState("mp.templates", DEFAULT_TEMPLATES);
   const [voice, setVoice] = useLocalState("mp.voice", { samples: "", profile: "" });
+
+  const activeClient = useMemo(
+    () => clients.find((c) => c.id === activeClientId) || null,
+    [clients, activeClientId]
+  );
+
+  const openClient = (id) => {
+    setActiveClientId(id);
+    const c = clients.find((x) => x.id === id);
+    if (c) {
+      setBrief(clientToBrief(c));
+      setActive("dashboard");
+    }
+  };
+
+  const wrappedSetLibrary = (next) => {
+    const prevLen = library.length;
+    const tagged = next.map((item, i) => {
+      if (i >= prevLen && !item.clientId && activeClientId) {
+        return { ...item, clientId: activeClientId };
+      }
+      return item;
+    });
+    setLibrary(tagged);
+  };
 
   const groups = SECTIONS.reduce((acc, s) => {
     (acc[s.group] = acc[s.group] || []).push(s);
@@ -1643,10 +1985,11 @@ export default function App() {
 
   const renderSection = () => {
     switch (active) {
+      case "clients": return <ClientsDashboard clients={clients} setClients={setClients} library={library} onOpenClient={openClient} />;
       case "dashboard": return <Dashboard library={library} setActive={setActive} />;
       case "brief": return <ContentBrief apiKey={apiKey} brief={brief} setBrief={setBrief} />;
-      case "generator": return <Generator apiKey={apiKey} brief={brief} library={library} setLibrary={setLibrary} />;
-      case "bulk": return <BulkGenerate apiKey={apiKey} brief={brief} library={library} setLibrary={setLibrary} />;
+      case "generator": return <Generator apiKey={apiKey} brief={brief} library={library} setLibrary={wrappedSetLibrary} />;
+      case "bulk": return <BulkGenerate apiKey={apiKey} brief={brief} library={library} setLibrary={wrappedSetLibrary} />;
       case "campaign": return <CampaignBuilder apiKey={apiKey} brief={brief} />;
       case "quality": return <QualityScore apiKey={apiKey} />;
       case "predictor": return <PerformancePredictor apiKey={apiKey} />;
@@ -1665,7 +2008,7 @@ export default function App() {
       case "library": return <SavedLibrary library={library} setLibrary={setLibrary} />;
       case "templates": return <Templates templates={templates} setTemplates={setTemplates} />;
       case "voice": return <VoiceTrainer apiKey={apiKey} voice={voice} setVoice={setVoice} />;
-      default: return <Dashboard library={library} setActive={setActive} />;
+      default: return <ClientsDashboard clients={clients} setClients={setClients} library={library} onOpenClient={openClient} />;
     }
   };
 
@@ -1687,6 +2030,39 @@ export default function App() {
         <div style={styles.brand}>
           <div style={styles.brandTitle}>Smart Web Advisors</div>
           <div style={styles.brandSub}>Marketing Powerhouse</div>
+          {activeClient ? (
+            <div
+              style={{
+                marginTop: 12,
+                padding: "10px 12px",
+                background: "rgba(0,212,176,0.08)",
+                border: `1px solid ${COLORS.teal}`,
+                borderRadius: 8,
+              }}
+            >
+              <div style={{ fontSize: 10, color: COLORS.teal, textTransform: "uppercase", letterSpacing: 1.2, fontWeight: 700 }}>Active Client</div>
+              <div style={{ fontSize: 13, color: COLORS.white, fontWeight: 600, marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {activeClient.businessName}
+              </div>
+              <button
+                style={{
+                  marginTop: 6,
+                  background: "transparent",
+                  border: "none",
+                  color: COLORS.muted,
+                  fontSize: 11,
+                  padding: 0,
+                  cursor: "pointer",
+                  textDecoration: "underline",
+                }}
+                onClick={() => setActive("clients")}
+              >
+                Switch client
+              </button>
+            </div>
+          ) : (
+            <div style={{ marginTop: 10, fontSize: 11, color: COLORS.muted }}>No client selected</div>
+          )}
         </div>
         {Object.entries(groups).map(([group, items]) => (
           <div key={group}>
