@@ -136,7 +136,10 @@ async function callClaude(apiKey, system, userPrompt, maxTokens = 2048) {
     data = null;
   }
   if (!res.ok) {
-    throw new Error(data?.error || txt || `API ${res.status}`);
+    const message = typeof data?.error === "string"
+      ? data.error
+      : data?.error?.message || txt || `API ${res.status}`;
+    throw new Error(message);
   }
   return data?.content?.map((c) => c.text).join("\n") || "";
 }
