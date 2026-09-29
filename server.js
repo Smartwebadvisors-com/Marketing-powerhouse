@@ -1,7 +1,10 @@
 const express = require('express');
 const path = require('path');
+const { mountClaude } = require('./server/claudeProxy');
 const app = express();
 const PORT = process.env.PORT || 3001;
+
+mountClaude(app);
 
 app.use(express.static(path.join(__dirname, 'build')));
 

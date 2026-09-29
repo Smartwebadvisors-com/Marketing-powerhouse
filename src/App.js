@@ -14,7 +14,6 @@ const COLORS = {
   good: "#3BE0A6",
 };
 
-const API_URL = "https://api.anthropic.com/v1/messages";
 const MODEL = "claude-sonnet-4-20250514";
 
 const SECTIONS = [
@@ -117,15 +116,11 @@ function downloadCSV(filename, headers, rows) {
 }
 
 async function callClaude(apiKey, system, userPrompt, maxTokens = 2048) {
-  if (!apiKey) throw new Error("Missing API key. Open Settings (top right) and paste your Anthropic API key.");
-  const res = await fetch(API_URL, {
+  const headers = { "Content-Type": "application/json" };
+  if (apiKey) headers["x-api-key"] = apiKey;
+  const res = await fetch("/api/claude", {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-api-key": apiKey,
-      "anthropic-version": "2023-06-01",
-      "anthropic-dangerous-direct-browser-access": "true",
-    },
+    headers,
     body: JSON.stringify({
       model: MODEL,
       max_tokens: maxTokens,
@@ -133,12 +128,20 @@ async function callClaude(apiKey, system, userPrompt, maxTokens = 2048) {
       messages: [{ role: "user", content: userPrompt }],
     }),
   });
-  if (!res.ok) {
-    const txt = await res.text();
-    throw new Error(`API ${res.status}: ${txt}`);
+  const txt = await res.text();
+  let data = null;
+  try {
+    data = txt ? JSON.parse(txt) : null;
+  } catch {
+    data = null;
   }
-  const data = await res.json();
-  return data.content?.map((c) => c.text).join("\n") || "";
+  if (!res.ok) {
+    const message = typeof data?.error === "string"
+      ? data.error
+      : data?.error?.message || txt || `API ${res.status}`;
+    throw new Error(message);
+  }
+  return data?.content?.map((c) => c.text).join("\n") || "";
 }
 
 function useLocalState(key, initial) {
@@ -2763,6 +2766,7 @@ export default function App() {
   const [active, setActive] = useLocalState("mp.active", "clients");
   const [apiKey, setApiKey] = useLocalState("mp.apiKey", "");
   const [showKey, setShowKey] = useState(false);
+  const [serverKeyReady, setServerKeyReady] = useState(false);
   const [brief, setBrief] = useLocalState("mp.brief", {
     brand: "",
     audience: "",
@@ -2781,6 +2785,24 @@ export default function App() {
   const [voice, setVoice] = useLocalState("mp.voice", { samples: "", profile: "" });
   const [blogs, setBlogs] = useLocalState("mp.blogs", []);
   const [blogCalendar, setBlogCalendar] = useLocalState("mp.blogCalendar", []);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (typeof fetch !== "function") return undefined;
+    fetch("/api/claude/status")
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (!cancelled) setServerKeyReady(Boolean(data?.configured));
+      })
+      .catch(() => {
+        if (!cancelled) setServerKeyReady(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const keyIsSet = Boolean((apiKey || "").trim()) || serverKeyReady;
 
   const activeClient = useMemo(
     () => clients.find((c) => c.id === activeClientId) || null,
@@ -2921,7 +2943,7 @@ export default function App() {
             </div>
           ) : (
             <button style={styles.btnGhost} onClick={() => setShowKey(true)}>
-              {apiKey ? "● API Key Set" : "○ Set API Key"}
+              {keyIsSet ? "● API Key Set" : "○ Set API Key"}
             </button>
           )}
         </div>
