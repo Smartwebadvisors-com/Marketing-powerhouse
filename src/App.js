@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useMemo } from "react";
+import { imageStudioLink, studioSnapshot, studioSyncPlan } from "./studioSync";
 
 const COLORS = {
   bg: "#080E1A",
@@ -1491,9 +1492,10 @@ Deliver:
   );
 }
 
-function SavedLibrary({ library, setLibrary }) {
+function SavedLibrary({ library, setLibrary, clients, imageStudioUrl }) {
   const [filter, setFilter] = useState("All");
   const filtered = filter === "All" ? library : library.filter((l) => l.platform === filter);
+  const clientFor = (item) => (clients || []).find((c) => c.id === item.clientId) || null;
 
   return (
     <div>
@@ -1503,18 +1505,35 @@ function SavedLibrary({ library, setLibrary }) {
         {filtered.length === 0 ? (
           <div style={{ color: COLORS.muted, fontSize: 13 }}>Nothing saved yet. Generate something and click Save.</div>
         ) : (
-          filtered.map((it, i) => (
-            <div key={i} style={{ background: COLORS.cardAlt, padding: 14, borderRadius: 8, marginBottom: 10 }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-                <div>
-                  <span style={styles.pill}>{it.platform}</span>
-                  <span style={{ fontSize: 12, color: COLORS.muted, marginLeft: 8 }}>{it.savedAt?.slice(0, 10)}</span>
-                </div>
-                <button style={{ ...styles.btnGhost, padding: "4px 10px", fontSize: 11 }} onClick={() => setLibrary(library.filter((_, idx) => library.indexOf(it) !== idx))}>Delete</button>
+          <>
+            {!imageStudioUrl && (
+              <div style={{ color: COLORS.muted, fontSize: 13, marginBottom: 12 }}>
+                Image Studio address is not set. Add IMAGE_STUDIO_URL on the server to make images from a saved post.
               </div>
-              <div style={{ fontSize: 13, whiteSpace: "pre-wrap" }}>{it.text}</div>
-            </div>
-          ))
+            )}
+            {filtered.map((it, i) => {
+              const href = imageStudioLink(imageStudioUrl, it, clientFor(it));
+              return (
+                <div key={i} style={{ background: COLORS.cardAlt, padding: 14, borderRadius: 8, marginBottom: 10 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, gap: 8 }}>
+                    <div>
+                      <span style={styles.pill}>{it.platform}</span>
+                      <span style={{ fontSize: 12, color: COLORS.muted, marginLeft: 8 }}>{it.savedAt?.slice(0, 10)}</span>
+                    </div>
+                    <div style={{ display: "flex", gap: 8 }}>
+                      {href ? (
+                        <a href={href} target="_blank" rel="noreferrer" style={{ ...styles.btn, padding: "4px 10px", fontSize: 11, textDecoration: "none" }}>Make the image</a>
+                      ) : (
+                        <button type="button" disabled style={{ ...styles.btn, padding: "4px 10px", fontSize: 11, opacity: 0.55, cursor: "default" }}>Make the image</button>
+                      )}
+                      <button style={{ ...styles.btnGhost, padding: "4px 10px", fontSize: 11 }} onClick={() => setLibrary(library.filter((_, idx) => library.indexOf(it) !== idx))}>Delete</button>
+                    </div>
+                  </div>
+                  <div style={{ fontSize: 13, whiteSpace: "pre-wrap" }}>{it.text}</div>
+                </div>
+              );
+            })}
+          </>
         )}
       </div>
     </div>
@@ -2475,6 +2494,7 @@ const EMPTY_CLIENT = {
   website: "",
   targetAudience: "",
   brandVoice: "Professional",
+  brandColors: "",
   goal: "Awareness",
   platforms: [],
   mainOffer: "",
@@ -2552,6 +2572,9 @@ function ClientForm({ initial, onSave, onCancel }) {
             <Select value={c.goal} onChange={(v) => set("goal", v)} options={GOALS} />
           </Field>
         </div>
+        <Field label="Brand Colors">
+          <input style={styles.input} value={c.brandColors || ""} onChange={(e) => set("brandColors", e.target.value)} placeholder="navy #001122, cream #F5EFE3" />
+        </Field>
         <Field label="Platforms">
           <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
             {PLATFORMS.map((p) => {
@@ -2785,22 +2808,107 @@ export default function App() {
   const [voice, setVoice] = useLocalState("mp.voice", { samples: "", profile: "" });
   const [blogs, setBlogs] = useLocalState("mp.blogs", []);
   const [blogCalendar, setBlogCalendar] = useLocalState("mp.blogCalendar", []);
+  const [imageStudioUrl, setImageStudioUrl] = useState("");
+  const [syncReady, setSyncReady] = useState(false);
+
+  const adoptStudio = (data) => {
+    setClients(Array.isArray(data.clients) ? data.clients : []);
+    setActiveClientId(typeof data.activeClientId === "string" ? data.activeClientId : "");
+    if (data.brief && typeof data.brief === "object") setBrief(data.brief);
+    setLibrary(Array.isArray(data.library) ? data.library : []);
+    setApprovals(Array.isArray(data.approvals) ? data.approvals : []);
+    setCalendar(Array.isArray(data.calendar) ? data.calendar : []);
+    setTracking(Array.isArray(data.tracking) ? data.tracking : []);
+    if (Array.isArray(data.templates) && data.templates.length > 0) setTemplates(data.templates);
+    if (data.voice && typeof data.voice === "object") {
+      setVoice({ samples: data.voice.samples || "", profile: data.voice.profile || "" });
+    }
+    setBlogs(Array.isArray(data.blogs) ? data.blogs : []);
+    setBlogCalendar(Array.isArray(data.blogCalendar) ? data.blogCalendar : []);
+  };
 
   useEffect(() => {
     let cancelled = false;
     if (typeof fetch !== "function") return undefined;
-    fetch("/api/claude/status")
-      .then((res) => (res.ok ? res.json() : null))
-      .then((data) => {
-        if (!cancelled) setServerKeyReady(Boolean(data?.configured));
-      })
-      .catch(() => {
+    const local = studioSnapshot({
+      clients,
+      activeClientId,
+      brief,
+      library,
+      approvals,
+      calendar,
+      tracking,
+      templates,
+      voice,
+      blogs,
+      blogCalendar,
+    });
+    (async () => {
+      try {
+        const statusRes = await fetch("/api/claude/status");
+        const status = statusRes.ok ? await statusRes.json() : null;
+        if (!cancelled) setServerKeyReady(Boolean(status?.configured));
+      } catch {
         if (!cancelled) setServerKeyReady(false);
-      });
+      }
+      try {
+        const configRes = await fetch("/api/config");
+        const config = configRes.ok ? await configRes.json() : null;
+        if (!cancelled) setImageStudioUrl(typeof config?.imageStudioUrl === "string" ? config.imageStudioUrl : "");
+      } catch {
+        if (!cancelled) setImageStudioUrl("");
+      }
+      let server = null;
+      try {
+        const studioRes = await fetch("/api/studio");
+        if (studioRes.ok) server = await studioRes.json();
+      } catch {
+        server = null;
+      }
+      if (cancelled) return;
+      const plan = studioSyncPlan(server, local);
+      if (plan === "adopt") adoptStudio(server);
+      if (plan !== "offline") setSyncReady(true);
+    })();
     return () => {
       cancelled = true;
     };
+    // Hydrate once from the copy already in this browser, then keep the server copy.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    if (!syncReady || typeof fetch !== "function") return undefined;
+    const handle = setTimeout(() => {
+      fetch("/api/studio", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(studioSnapshot({
+          clients,
+          activeClientId,
+          brief,
+          library,
+          approvals,
+          calendar,
+          tracking,
+          templates,
+          voice,
+          blogs,
+          blogCalendar,
+        })),
+      }).catch(() => {});
+    }, 400);
+    return () => clearTimeout(handle);
+  }, [syncReady, clients, activeClientId, brief, library, approvals, calendar, tracking, templates, voice, blogs, blogCalendar]);
+
+  const signOut = async () => {
+    try {
+      await fetch("/api/logout", { method: "POST" });
+    } catch {
+      /* reload still returns to the password page when the cookie is missing */
+    }
+    window.location.reload();
+  };
 
   const keyIsSet = Boolean((apiKey || "").trim()) || serverKeyReady;
 
@@ -2857,7 +2965,7 @@ export default function App() {
       case "scheduling": return <Scheduling apiKey={apiKey} />;
       case "tracker": return <PerformanceTracker tracking={tracking} setTracking={setTracking} />;
       case "digest": return <WeeklyDigest apiKey={apiKey} tracking={tracking} />;
-      case "library": return <SavedLibrary library={library} setLibrary={setLibrary} />;
+      case "library": return <SavedLibrary library={library} setLibrary={setLibrary} clients={clients} imageStudioUrl={imageStudioUrl} />;
       case "templates": return <Templates templates={templates} setTemplates={setTemplates} />;
       case "voice": return <VoiceTrainer apiKey={apiKey} voice={voice} setVoice={setVoice} />;
       default: return <ClientsDashboard clients={clients} setClients={setClients} library={library} onOpenClient={openClient} />;
@@ -2929,7 +3037,8 @@ export default function App() {
         ))}
       </aside>
       <main style={styles.main}>
-        <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 8 }}>
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginBottom: 8 }}>
+          <button style={styles.btnGhost} onClick={signOut}>Sign out</button>
           {showKey ? (
             <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
               <input
