@@ -76,14 +76,12 @@ test('links a saved post to image studio', async () => {
   expect(href.searchParams.get("style")).toBe("Bold");
 });
 
-test('the client form collects the audience sheet', () => {
+test('the client form asks who they sell to', () => {
   render(<App />);
   fireEvent.click(screen.getByRole('button', { name: /add new client/i }));
-  expect(screen.getByText('Environment')).toBeInTheDocument();
-  expect(screen.getByText('Socioeconomic situation')).toBeInTheDocument();
-  expect(screen.getByText('Class')).toBeInTheDocument();
-  expect(screen.getByText('History')).toBeInTheDocument();
-  expect(screen.getByText('What they want')).toBeInTheDocument();
-  expect(screen.getByText('What they fear')).toBeInTheDocument();
-  expect(screen.getByText('Proof we may use')).toBeInTheDocument();
+  expect(screen.getByText('Target Audience')).toBeInTheDocument();
+  expect(screen.queryByText('Environment')).not.toBeInTheDocument();
+  expect(screen.queryByText('Socioeconomic situation')).not.toBeInTheDocument();
+  expect(screen.queryByText('Class')).not.toBeInTheDocument();
+  expect(screen.queryByText(/^History$/)).not.toBeInTheDocument();
 });

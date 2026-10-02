@@ -475,6 +475,7 @@ function Dashboard({ library, setActive }) {
 
 function ContentBrief({ apiKey, brief, setBrief, client, voice }) {
   const [out, setOut] = useState("");
+  const [read, setRead] = useState("");
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState("");
 
@@ -483,12 +484,16 @@ function ContentBrief({ apiKey, brief, setBrief, client, voice }) {
     setErr("");
     try {
       const facts = clientFactBlock({ client, brief, voice });
-      const sys = "You are a senior brand strategist. You build the brief only from the client facts you are given.";
-      const prompt = draftBrief(facts, "Use the client facts. Where a fact is missing, do not fill the gap with a guess.", `Build a complete content brief.
+      const { read, draft } = await writeFromAudience({
+        apiKey,
+        facts,
+        maxTokens: 2500,
+        task: `Build a complete content brief.
 
-Deliver: (1) positioning statement, (2) three message pillars, (3) tone guardrails, (4) success metrics, (5) creative angles (5 ideas).`);
-      const txt = await callClaude(apiKey, sys, prompt);
-      setOut(txt);
+Deliver: (1) positioning statement, (2) three message pillars, (3) tone guardrails, (4) success metrics, (5) creative angles (5 ideas). Use the audience read. Do not invent a named customer, a statistic, or a quote.`,
+      });
+      setRead(read);
+      setOut(draft);
     } catch (e) {
       setErr(e.message);
     }
@@ -527,6 +532,7 @@ Deliver: (1) positioning statement, (2) three message pillars, (3) tone guardrai
         <Button onClick={run} loading={loading}>Generate Strategic Brief</Button>
         {err && <div style={{ color: COLORS.danger, marginTop: 12, fontSize: 13 }}>{err}</div>}
       </div>
+      <AudienceRead text={read} />
       <Output text={out} loading={loading} />
     </div>
   );
@@ -559,8 +565,9 @@ ${platformShape(platform)}
 
 Each post must:
 - End with this call to action: "${cta}"
-- Use at least one concrete detail from the client facts when any detail is on file
-- Stay silent about any fact that is not on file
+- Use the audience read, including the environment, socioeconomic pressure, class, and history it worked out
+- Use a concrete detail from the owner only when one is on file
+- Not invent a named customer, a statistic, or a quote
 
 Label each variant clearly: "Variant 1", "Variant 2", etc.`,
       });
@@ -603,7 +610,7 @@ Label each variant clearly: "Variant 1", "Variant 2", etc.`,
           <input style={styles.input} value={cta} onChange={(e) => setCta(e.target.value)} />
         </Field>
         <div style={{ color: COLORS.muted, fontSize: 12, marginBottom: 12 }}>
-          {client ? "Writes from this client's audience sheet, offer, and voice." : "No client selected. The draft uses only the content brief."}
+          {client ? "Studies this client's audience, then writes. You do not fill in environment, class, or history." : "No client selected. Open a client so the writer can study that audience."}
         </div>
         <div style={{ display: "flex", gap: 10 }}>
           <Button onClick={run} loading={loading}>Generate</Button>
@@ -642,7 +649,7 @@ function BulkGenerate({ apiKey, brief, library, setLibrary, client, voice }) {
 Shape for this platform:
 ${platformShape(platform)}
 
-Each post must use at least one concrete detail from the client facts when any detail is on file.
+Each post must use the audience read. Do not invent a named customer, a statistic, or a quote.
 
 Topics:
 ${list.map((t, i) => `${i + 1}. ${t}`).join("\n")}`,
@@ -2560,13 +2567,6 @@ const EMPTY_CLIENT = {
   location: "",
   website: "",
   targetAudience: "",
-  environment: "",
-  socioeconomic: "",
-  socialClass: "",
-  history: "",
-  wants: "",
-  fears: "",
-  proof: "",
   brandVoice: "Professional",
   brandColors: "",
   goal: "Awareness",
@@ -2636,28 +2636,7 @@ function ClientForm({ initial, onSave, onCancel }) {
           </Field>
         </div>
         <Field label="Target Audience">
-          <textarea style={{ ...styles.textarea, minHeight: 70 }} value={c.targetAudience} onChange={(e) => set("targetAudience", e.target.value)} placeholder="Who they are, in their words" />
-        </Field>
-        <Field label="Environment">
-          <textarea style={{ ...styles.textarea, minHeight: 70 }} value={c.environment || ""} onChange={(e) => set("environment", e.target.value)} placeholder="Place, season, industry pressure, local conditions" />
-        </Field>
-        <Field label="Socioeconomic situation">
-          <textarea style={{ ...styles.textarea, minHeight: 70 }} value={c.socioeconomic || ""} onChange={(e) => set("socioeconomic", e.target.value)} placeholder="Income, costs, time, and what they can afford" />
-        </Field>
-        <Field label="Class">
-          <textarea style={{ ...styles.textarea, minHeight: 70 }} value={c.socialClass || ""} onChange={(e) => set("socialClass", e.target.value)} placeholder="How they see their place, and who they do not want to sound like" />
-        </Field>
-        <Field label="History">
-          <textarea style={{ ...styles.textarea, minHeight: 70 }} value={c.history || ""} onChange={(e) => set("history", e.target.value)} placeholder="What has already happened for this audience or this client" />
-        </Field>
-        <Field label="What they want">
-          <textarea style={{ ...styles.textarea, minHeight: 70 }} value={c.wants || ""} onChange={(e) => set("wants", e.target.value)} placeholder="The result they are trying to get" />
-        </Field>
-        <Field label="What they fear">
-          <textarea style={{ ...styles.textarea, minHeight: 70 }} value={c.fears || ""} onChange={(e) => set("fears", e.target.value)} placeholder="The loss or embarrassment they are trying to avoid" />
-        </Field>
-        <Field label="Proof we may use">
-          <textarea style={{ ...styles.textarea, minHeight: 70 }} value={c.proof || ""} onChange={(e) => set("proof", e.target.value)} placeholder="Results, stories, and details the writer is allowed to use" />
+          <textarea style={{ ...styles.textarea, minHeight: 70 }} value={c.targetAudience} onChange={(e) => set("targetAudience", e.target.value)} placeholder="Who they sell to, in plain words" />
         </Field>
         <div style={styles.row}>
           <Field label="Brand Voice">

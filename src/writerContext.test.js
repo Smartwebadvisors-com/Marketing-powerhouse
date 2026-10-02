@@ -2,48 +2,46 @@ import { audienceReadPrompt, clientFactBlock, draftBrief, platformShape } from "
 
 const client = {
   businessName: "Harbor & Co",
+  industry: "Food",
+  location: "Maine",
   targetAudience: "Independent cafe owners",
-  environment: "Coastal towns with a short summer season",
-  socioeconomic: "Thin margins and rising rent",
-  socialClass: "Working owners, not corporate buyers",
-  history: "Most have run the shop for 10 years or more",
-  wants: "A full room on weeknights",
-  fears: "A quiet January",
-  proof: "One shop filled Tuesdays after a 4-week dinner series",
   mainOffer: "A weeknight dinner series",
   notes: "Do not mention discounts",
 };
 
-test("builds a client fact block and leaves out empty facts", () => {
+test("keeps the owner facts and leaves analysis to the writer", () => {
   const block = clientFactBlock({
     client,
     brief: { tone: "Warm", audience: "Independent cafe owners" },
     voice: { profile: "Short sentences. No hype." },
   });
-  expect(block).toMatch(/Do not invent/);
-  expect(block).toMatch(/Environment: Coastal towns/);
-  expect(block).toMatch(/Class: Working owners/);
+  expect(block).toMatch(/Analyze the audience/);
   expect(block).toMatch(/Main offer: A weeknight dinner series/);
   expect(block).toMatch(/Voice profile: Short sentences/);
   expect(block).not.toMatch(/Website:/);
-  expect(block).not.toMatch(/Brand colors:/);
+  expect(block).not.toMatch(/^Environment:/m);
 });
 
-test("does not invent a life story when the sheet is empty", () => {
-  const block = clientFactBlock({ client: { businessName: "Harbor & Co" }, brief: {}, voice: {} });
+test("does not ask the owner for environment, class, or history", () => {
+  const block = clientFactBlock({ client: { businessName: "Harbor & Co", industry: "Food", location: "Maine" }, brief: {}, voice: {} });
   expect(block).toMatch(/Business: Harbor & Co/);
-  expect(block).not.toMatch(/Environment:/);
-  expect(block).not.toMatch(/History:/);
+  expect(block).not.toMatch(/^Environment:/m);
+  expect(block).not.toMatch(/^Class:/m);
   const empty = clientFactBlock({});
   expect(empty).toMatch(/No client facts are on file/);
 });
 
-test("asks for an audience read and a platform shape before the draft", () => {
+test("tells the strategist to work out the audience before the draft", () => {
   const facts = clientFactBlock({ client, brief: { tone: "Warm" }, voice: {} });
-  expect(audienceReadPrompt(facts)).toMatch(/Not on file/);
-  expect(audienceReadPrompt(facts)).toMatch(/belief to challenge/);
+  const read = audienceReadPrompt(facts);
+  expect(read).toMatch(/Environmental factors/);
+  expect(read).toMatch(/Socioeconomic factors/);
+  expect(read).toMatch(/Class/);
+  expect(read).toMatch(/History/);
+  expect(read).toMatch(/The owner will not fill in/);
+  expect(read).toMatch(/Do not invent a named customer/);
   expect(platformShape("LinkedIn")).toMatch(/stand alone/);
-  const draft = draftBrief(facts, "Who: cafe owners\nPressure: January is quiet", "Write 1 LinkedIn post.");
+  const draft = draftBrief(facts, "Who: cafe owners\nLikely pressure: January is quiet", "Write 1 LinkedIn post.");
   expect(draft).toMatch(/AUDIENCE READ:/);
   expect(draft).toMatch(/weeknight dinner series/);
 });
