@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useMemo } from "react";
 import { imageStudioLink, studioSnapshot, studioSyncPlan } from "./studioSync";
+import { audienceReadPrompt, AUDIENCE_READ_SYSTEM, clientFactBlock, DRAFT_SYSTEM, draftBrief, platformShape } from "./writerContext";
 
 const COLORS = {
   bg: "#080E1A",
@@ -143,6 +144,22 @@ async function callClaude(apiKey, system, userPrompt, maxTokens = 2048) {
     throw new Error(message);
   }
   return data?.content?.map((c) => c.text).join("\n") || "";
+}
+
+async function writeFromAudience({ apiKey, facts, task, maxTokens = 2500 }) {
+  const read = await callClaude(apiKey, AUDIENCE_READ_SYSTEM, audienceReadPrompt(facts), 900);
+  const draft = await callClaude(apiKey, DRAFT_SYSTEM, draftBrief(facts, read, task), maxTokens);
+  return { read, draft };
+}
+
+function AudienceRead({ text }) {
+  if (!text) return null;
+  return (
+    <div style={styles.card}>
+      <h3 style={{ marginTop: 0 }}>Audience read</h3>
+      <div style={{ whiteSpace: "pre-wrap", fontSize: 13.5, lineHeight: 1.55 }}>{text}</div>
+    </div>
+  );
 }
 
 function useLocalState(key, initial) {
@@ -456,7 +473,7 @@ function Dashboard({ library, setActive }) {
   );
 }
 
-function ContentBrief({ apiKey, brief, setBrief }) {
+function ContentBrief({ apiKey, brief, setBrief, client, voice }) {
   const [out, setOut] = useState("");
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState("");
@@ -465,17 +482,11 @@ function ContentBrief({ apiKey, brief, setBrief }) {
     setLoading(true);
     setErr("");
     try {
-      const sys = "You are a senior brand strategist at a top-tier creative agency.";
-      const prompt = `Build a complete content brief.
+      const facts = clientFactBlock({ client, brief, voice });
+      const sys = "You are a senior brand strategist. You build the brief only from the client facts you are given.";
+      const prompt = draftBrief(facts, "Use the client facts. Where a fact is missing, do not fill the gap with a guess.", `Build a complete content brief.
 
-Brand: ${brief.brand}
-Audience: ${brief.audience}
-Objective: ${brief.objective}
-Tone: ${brief.tone}
-Key Message: ${brief.keyMessage}
-Constraints: ${brief.constraints}
-
-Deliver: (1) positioning statement, (2) three message pillars, (3) tone guardrails, (4) success metrics, (5) creative angles (5 ideas).`;
+Deliver: (1) positioning statement, (2) three message pillars, (3) tone guardrails, (4) success metrics, (5) creative angles (5 ideas).`);
       const txt = await callClaude(apiKey, sys, prompt);
       setOut(txt);
     } catch (e) {
@@ -521,31 +532,40 @@ Deliver: (1) positioning statement, (2) three message pillars, (3) tone guardrai
   );
 }
 
-function Generator({ apiKey, brief, library, setLibrary }) {
+function Generator({ apiKey, brief, library, setLibrary, client, voice }) {
   const [platform, setPlatform] = useState("LinkedIn");
   const [topic, setTopic] = useState("");
   const [variants, setVariants] = useState(3);
   const [cta, setCta] = useState("Learn more");
   const [out, setOut] = useState("");
+  const [read, setRead] = useState("");
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState("");
 
   const run = async () => {
     setLoading(true);
     setErr("");
+    setRead("");
     try {
-      const sys = `You are an expert social media copywriter for ${brief.brand || "a leading brand"}. Tone: ${brief.tone}. Audience: ${brief.audience}.`;
-      const prompt = `Write ${variants} distinct ${platform} post variants on: "${topic}".
+      const facts = clientFactBlock({ client, brief, voice });
+      const { read: nextRead, draft } = await writeFromAudience({
+        apiKey,
+        facts,
+        maxTokens: 2500,
+        task: `Write ${variants} distinct ${platform} post variants on: "${topic}".
 
-Each post should:
-- Hook in the first line
-- Match platform best practices and length
-- End with this CTA: "${cta}"
-- Include 3-5 relevant hashtags (for platforms that use them)
+Shape for this platform:
+${platformShape(platform)}
 
-Label each variant clearly: "Variant 1", "Variant 2", etc.`;
-      const txt = await callClaude(apiKey, sys, prompt, 2500);
-      setOut(txt);
+Each post must:
+- End with this call to action: "${cta}"
+- Use at least one concrete detail from the client facts when any detail is on file
+- Stay silent about any fact that is not on file
+
+Label each variant clearly: "Variant 1", "Variant 2", etc.`,
+      });
+      setRead(nextRead);
+      setOut(draft);
     } catch (e) {
       setErr(e.message);
     }
@@ -582,6 +602,9 @@ Label each variant clearly: "Variant 1", "Variant 2", etc.`;
         <Field label="Call to Action">
           <input style={styles.input} value={cta} onChange={(e) => setCta(e.target.value)} />
         </Field>
+        <div style={{ color: COLORS.muted, fontSize: 12, marginBottom: 12 }}>
+          {client ? "Writes from this client's audience sheet, offer, and voice." : "No client selected. The draft uses only the content brief."}
+        </div>
         <div style={{ display: "flex", gap: 10 }}>
           <Button onClick={run} loading={loading}>Generate</Button>
           {out && <Button ghost onClick={save}>Save to Library</Button>}
@@ -589,30 +612,43 @@ Label each variant clearly: "Variant 1", "Variant 2", etc.`;
         </div>
         {err && <div style={{ color: COLORS.danger, marginTop: 12, fontSize: 13 }}>{err}</div>}
       </div>
+      <AudienceRead text={read} />
       <Output text={out} loading={loading} />
     </div>
   );
 }
 
-function BulkGenerate({ apiKey, brief, library, setLibrary }) {
+function BulkGenerate({ apiKey, brief, library, setLibrary, client, voice }) {
   const [topics, setTopics] = useState("");
   const [platform, setPlatform] = useState("LinkedIn");
   const [out, setOut] = useState("");
+  const [read, setRead] = useState("");
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState("");
 
   const run = async () => {
     setLoading(true);
     setErr("");
+    setRead("");
     try {
       const list = topics.split("\n").filter((t) => t.trim());
-      const sys = `You are a prolific ${platform} copywriter. Brand tone: ${brief.tone}.`;
-      const prompt = `Write a separate ${platform} post for each topic below. Number them. Each post must be polished and ready to publish.
+      const facts = clientFactBlock({ client, brief, voice });
+      const { read: nextRead, draft } = await writeFromAudience({
+        apiKey,
+        facts,
+        maxTokens: 4000,
+        task: `Write a separate ${platform} post for each topic below. Number them.
+
+Shape for this platform:
+${platformShape(platform)}
+
+Each post must use at least one concrete detail from the client facts when any detail is on file.
 
 Topics:
-${list.map((t, i) => `${i + 1}. ${t}`).join("\n")}`;
-      const txt = await callClaude(apiKey, sys, prompt, 4000);
-      setOut(txt);
+${list.map((t, i) => `${i + 1}. ${t}`).join("\n")}`,
+      });
+      setRead(nextRead);
+      setOut(draft);
     } catch (e) {
       setErr(e.message);
     }
@@ -659,6 +695,7 @@ ${list.map((t, i) => `${i + 1}. ${t}`).join("\n")}`;
         )}
         {err && <div style={{ color: COLORS.danger, marginTop: 12, fontSize: 13 }}>{err}</div>}
       </div>
+      <AudienceRead text={read} />
       {loading && <Output text={out} loading={loading} />}
       {!loading && items.length > 0 && (
         <div style={{ marginTop: 16 }}>
@@ -681,11 +718,12 @@ ${list.map((t, i) => `${i + 1}. ${t}`).join("\n")}`;
   );
 }
 
-function CampaignBuilder({ apiKey, brief }) {
+function CampaignBuilder({ apiKey, brief, client, voice }) {
   const [theme, setTheme] = useState("");
   const [duration, setDuration] = useState("2 weeks");
   const [platforms, setPlatforms] = useState("Instagram, Facebook, LinkedIn, TikTok, YouTube Shorts, X/Twitter, Threads, Pinterest");
   const [out, setOut] = useState("");
+  const [read, setRead] = useState("");
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState("");
 
@@ -693,23 +731,26 @@ function CampaignBuilder({ apiKey, brief }) {
     setLoading(true);
     setErr("");
     try {
-      const sys = "You are a senior campaign strategist at a top creative agency.";
-      const prompt = `Build a multi-platform campaign plan.
+      const facts = clientFactBlock({ client, brief, voice });
+      const { read, draft } = await writeFromAudience({
+        apiKey,
+        facts,
+        maxTokens: 3000,
+        task: `Build a multi-platform campaign plan.
 
-Brand: ${brief.brand}
-Audience: ${brief.audience}
-Campaign Theme: ${theme}
+Campaign theme: ${theme}
 Duration: ${duration}
 Platforms: ${platforms}
 
 Deliver:
 1. Big idea (one sentence)
 2. Week-by-week content arc
-3. Per-platform post breakdown with examples
+3. Per-platform post breakdown with examples that use the client facts
 4. KPIs to track
-5. Risk / mitigation table`;
-      const txt = await callClaude(apiKey, sys, prompt, 3000);
-      setOut(txt);
+5. Risk / mitigation table`,
+      });
+      setRead(read);
+      setOut(draft);
     } catch (e) {
       setErr(e.message);
     }
@@ -734,6 +775,7 @@ Deliver:
         <Button onClick={run} loading={loading}>Build Campaign</Button>
         {err && <div style={{ color: COLORS.danger, marginTop: 12, fontSize: 13 }}>{err}</div>}
       </div>
+      <AudienceRead text={read} />
       <Output text={out} loading={loading} />
     </div>
   );
@@ -1722,7 +1764,7 @@ function copyToClipboard(text) {
   return Promise.resolve();
 }
 
-function BlogGeneratorTab({ apiKey, activeClient, blogs, setBlogs, onBlogGenerated }) {
+function BlogGeneratorTab({ apiKey, activeClient, blogs, setBlogs, onBlogGenerated, voice }) {
   const [topic, setTopic] = useState("");
   const [keyword, setKeyword] = useState("");
   const [audience, setAudience] = useState(activeClient?.targetAudience || "");
@@ -1731,6 +1773,7 @@ function BlogGeneratorTab({ apiKey, activeClient, blogs, setBlogs, onBlogGenerat
   const [blogType, setBlogType] = useState("How-To Guide");
   const [lengthLabel, setLengthLabel] = useState(BLOG_LENGTHS[1].label);
   const [raw, setRaw] = useState("");
+  const [read, setRead] = useState("");
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState("");
   const [msg, setMsg] = useState("");
@@ -1748,22 +1791,29 @@ function BlogGeneratorTab({ apiKey, activeClient, blogs, setBlogs, onBlogGenerat
     setLoading(true);
     setErr("");
     setRaw("");
+    setRead("");
     try {
-      const sys = `You are an expert blog writer and SEO strategist for ${business || "a leading brand"}. Write in a ${tone} tone.`;
-      const prompt = `Write a complete, polished ${blogType} blog post.
+      const facts = clientFactBlock({
+        client: activeClient,
+        brief: { brand: business, audience, tone, objective: activeClient?.goal, constraints: activeClient?.notes },
+        voice,
+      });
+      const { read: nextRead, draft } = await writeFromAudience({
+        apiKey,
+        facts,
+        maxTokens: 6000,
+        task: `Write a complete, polished ${blogType} blog post.
 
 Topic: ${topic}
 Target Keyword: ${keyword}
-Audience: ${audience}
-Business: ${business}
 Approximate length: ${lengthWords} words
 
 Structure the post with:
 - A single H1 title using "# "
-- An engaging intro paragraph (hook + promise)
-- Multiple H2 sections using "## " with substantive body content
+- The answer in the first two paragraphs
+- Multiple H2 sections using "## " built from this client's world
 - A clear conclusion
-- A persuasive call-to-action paragraph at the end
+- One mention of the offer, near the end, only if an offer is on file
 
 After the blog, return SEO metadata using these EXACT markers:
 
@@ -1779,10 +1829,11 @@ SEO meta description (max 155 characters, compelling, includes the keyword)
 exactly 5 comma-separated tags relevant for content tagging and search
 [/TAGS]
 
-Return ONLY the blog (in markdown) followed by the three tagged metadata blocks. No preamble.`;
-      const txt = await callClaude(apiKey, sys, prompt, 6000);
-      setRaw(txt);
-      const blog = txt.split(/\[META_TITLE\]/)[0].trim();
+Return ONLY the blog (in markdown) followed by the three tagged metadata blocks. No preamble.`,
+      });
+      setRead(nextRead);
+      setRaw(draft);
+      const blog = draft.split(/\[META_TITLE\]/)[0].trim();
       if (onBlogGenerated && blog) onBlogGenerated(blog);
     } catch (e) {
       setErr(e.message);
@@ -1909,6 +1960,7 @@ Return ONLY the blog (in markdown) followed by the three tagged metadata blocks.
       </div>
 
       {loading && <Output loading={true} />}
+      <AudienceRead text={read} />
 
       {!loading && blogPart && (
         <>
@@ -1961,7 +2013,7 @@ Return ONLY the blog (in markdown) followed by the three tagged metadata blocks.
   );
 }
 
-function BlogToSocialTab({ apiKey, lastBlog, library, setLibrary }) {
+function BlogToSocialTab({ apiKey, lastBlog, library, setLibrary, client, voice }) {
   const [content, setContent] = useState("");
   const [raw, setRaw] = useState("");
   const [loading, setLoading] = useState(false);
@@ -1983,8 +2035,12 @@ function BlogToSocialTab({ apiKey, lastBlog, library, setLibrary }) {
     setErr("");
     setRaw("");
     try {
-      const sys = "You are an expert social media copywriter. Convert long-form content into platform-native posts that respect each platform's voice, length, and conventions.";
+      const facts = clientFactBlock({ client, voice });
+      const sys = "You are an expert social media copywriter. Convert long-form content into platform-native posts. Use only the client facts you are given.";
       const prompt = `Given the blog post below, create platform-specific social posts.
+
+CLIENT FACTS:
+${facts}
 
 Use EXACTLY these markers (nothing outside them):
 
@@ -2113,7 +2169,7 @@ ${content}`;
   );
 }
 
-function SEOBriefTab({ apiKey, activeClient, blogs, setBlogs }) {
+function SEOBriefTab({ apiKey, activeClient, blogs, setBlogs, voice }) {
   const [keyword, setKeyword] = useState("");
   const [industry, setIndustry] = useState(activeClient?.industry || "");
   const [audience, setAudience] = useState(activeClient?.targetAudience || "");
@@ -2129,13 +2185,20 @@ function SEOBriefTab({ apiKey, activeClient, blogs, setBlogs }) {
     setLoading(true);
     setErr("");
     try {
-      const sys = "You are an SEO content strategist. Produce briefs that are specific, search-aligned, and immediately actionable for writers.";
+      const facts = clientFactBlock({
+        client: activeClient,
+        brief: { audience, brand: activeClient?.businessName },
+        voice,
+      });
+      const sys = "You are an SEO content strategist. Produce briefs that are specific, search-aligned, and immediately actionable for writers. Use only the client facts you are given.";
       const prompt = `Create a complete SEO content brief for the target keyword below.
 
 Target Keyword: ${keyword}
 Industry: ${industry}
-Audience: ${audience}
 ${competitor ? `Competitor URL to consider: ${competitor}` : ""}
+
+CLIENT FACTS:
+${facts}
 
 Deliver the brief with these sections (use clear bold headings):
 
@@ -2406,7 +2469,7 @@ function BlogCalendarTab({ clients, activeClient, blogCalendar, setBlogCalendar 
   );
 }
 
-function BlogStudio({ apiKey, activeClient, clients, blogs, setBlogs, library, setLibrary, blogCalendar, setBlogCalendar }) {
+function BlogStudio({ apiKey, activeClient, clients, blogs, setBlogs, library, setLibrary, blogCalendar, setBlogCalendar, voice }) {
   const [tab, setTab] = useState("generator");
   const [lastBlog, setLastBlog] = useState(() => {
     const lastSaved = [...blogs].reverse().find((b) => b.type === "blog");
@@ -2455,6 +2518,7 @@ function BlogStudio({ apiKey, activeClient, clients, blogs, setBlogs, library, s
           blogs={blogs}
           setBlogs={setBlogs}
           onBlogGenerated={setLastBlog}
+          voice={voice}
         />
       )}
       {tab === "social" && (
@@ -2463,6 +2527,8 @@ function BlogStudio({ apiKey, activeClient, clients, blogs, setBlogs, library, s
           lastBlog={lastBlog}
           library={library}
           setLibrary={setLibrary}
+          client={activeClient}
+          voice={voice}
         />
       )}
       {tab === "seo" && (
@@ -2471,6 +2537,7 @@ function BlogStudio({ apiKey, activeClient, clients, blogs, setBlogs, library, s
           activeClient={activeClient}
           blogs={blogs}
           setBlogs={setBlogs}
+          voice={voice}
         />
       )}
       {tab === "calendar" && (
@@ -2493,6 +2560,13 @@ const EMPTY_CLIENT = {
   location: "",
   website: "",
   targetAudience: "",
+  environment: "",
+  socioeconomic: "",
+  socialClass: "",
+  history: "",
+  wants: "",
+  fears: "",
+  proof: "",
   brandVoice: "Professional",
   brandColors: "",
   goal: "Awareness",
@@ -2562,7 +2636,28 @@ function ClientForm({ initial, onSave, onCancel }) {
           </Field>
         </div>
         <Field label="Target Audience">
-          <textarea style={{ ...styles.textarea, minHeight: 70 }} value={c.targetAudience} onChange={(e) => set("targetAudience", e.target.value)} placeholder="B2B founders, 30-50, US/EU" />
+          <textarea style={{ ...styles.textarea, minHeight: 70 }} value={c.targetAudience} onChange={(e) => set("targetAudience", e.target.value)} placeholder="Who they are, in their words" />
+        </Field>
+        <Field label="Environment">
+          <textarea style={{ ...styles.textarea, minHeight: 70 }} value={c.environment || ""} onChange={(e) => set("environment", e.target.value)} placeholder="Place, season, industry pressure, local conditions" />
+        </Field>
+        <Field label="Socioeconomic situation">
+          <textarea style={{ ...styles.textarea, minHeight: 70 }} value={c.socioeconomic || ""} onChange={(e) => set("socioeconomic", e.target.value)} placeholder="Income, costs, time, and what they can afford" />
+        </Field>
+        <Field label="Class">
+          <textarea style={{ ...styles.textarea, minHeight: 70 }} value={c.socialClass || ""} onChange={(e) => set("socialClass", e.target.value)} placeholder="How they see their place, and who they do not want to sound like" />
+        </Field>
+        <Field label="History">
+          <textarea style={{ ...styles.textarea, minHeight: 70 }} value={c.history || ""} onChange={(e) => set("history", e.target.value)} placeholder="What has already happened for this audience or this client" />
+        </Field>
+        <Field label="What they want">
+          <textarea style={{ ...styles.textarea, minHeight: 70 }} value={c.wants || ""} onChange={(e) => set("wants", e.target.value)} placeholder="The result they are trying to get" />
+        </Field>
+        <Field label="What they fear">
+          <textarea style={{ ...styles.textarea, minHeight: 70 }} value={c.fears || ""} onChange={(e) => set("fears", e.target.value)} placeholder="The loss or embarrassment they are trying to avoid" />
+        </Field>
+        <Field label="Proof we may use">
+          <textarea style={{ ...styles.textarea, minHeight: 70 }} value={c.proof || ""} onChange={(e) => set("proof", e.target.value)} placeholder="Results, stories, and details the writer is allowed to use" />
         </Field>
         <div style={styles.row}>
           <Field label="Brand Voice">
@@ -2946,11 +3041,11 @@ export default function App() {
     switch (active) {
       case "clients": return <ClientsDashboard clients={clients} setClients={setClients} library={library} onOpenClient={openClient} />;
       case "dashboard": return <Dashboard library={library} setActive={setActive} />;
-      case "brief": return <ContentBrief apiKey={apiKey} brief={brief} setBrief={setBrief} />;
-      case "generator": return <Generator apiKey={apiKey} brief={brief} library={library} setLibrary={wrappedSetLibrary} />;
-      case "bulk": return <BulkGenerate apiKey={apiKey} brief={brief} library={library} setLibrary={wrappedSetLibrary} />;
-      case "campaign": return <CampaignBuilder apiKey={apiKey} brief={brief} />;
-      case "blog": return <BlogStudio apiKey={apiKey} activeClient={activeClient} clients={clients} blogs={blogs} setBlogs={setBlogs} library={library} setLibrary={wrappedSetLibrary} blogCalendar={blogCalendar} setBlogCalendar={setBlogCalendar} />;
+      case "brief": return <ContentBrief apiKey={apiKey} brief={brief} setBrief={setBrief} client={activeClient} voice={voice} />;
+      case "generator": return <Generator apiKey={apiKey} brief={brief} library={library} setLibrary={wrappedSetLibrary} client={activeClient} voice={voice} />;
+      case "bulk": return <BulkGenerate apiKey={apiKey} brief={brief} library={library} setLibrary={wrappedSetLibrary} client={activeClient} voice={voice} />;
+      case "campaign": return <CampaignBuilder apiKey={apiKey} brief={brief} client={activeClient} voice={voice} />;
+      case "blog": return <BlogStudio apiKey={apiKey} activeClient={activeClient} clients={clients} blogs={blogs} setBlogs={setBlogs} library={library} setLibrary={wrappedSetLibrary} blogCalendar={blogCalendar} setBlogCalendar={setBlogCalendar} voice={voice} />;
       case "quality": return <QualityScore apiKey={apiKey} />;
       case "predictor": return <PerformancePredictor apiKey={apiKey} />;
       case "abtester": return <ABTester apiKey={apiKey} />;

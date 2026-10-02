@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import App from './App';
 
 function jsonResponse(body) {
@@ -74,4 +74,16 @@ test('links a saved post to image studio', async () => {
   expect(href.searchParams.get("prompt")).toBe("Launch day post");
   expect(href.searchParams.get("client")).toBe("Northwind Studio");
   expect(href.searchParams.get("style")).toBe("Bold");
+});
+
+test('the client form collects the audience sheet', () => {
+  render(<App />);
+  fireEvent.click(screen.getByRole('button', { name: /add new client/i }));
+  expect(screen.getByText('Environment')).toBeInTheDocument();
+  expect(screen.getByText('Socioeconomic situation')).toBeInTheDocument();
+  expect(screen.getByText('Class')).toBeInTheDocument();
+  expect(screen.getByText('History')).toBeInTheDocument();
+  expect(screen.getByText('What they want')).toBeInTheDocument();
+  expect(screen.getByText('What they fear')).toBeInTheDocument();
+  expect(screen.getByText('Proof we may use')).toBeInTheDocument();
 });
