@@ -1,0 +1,13 @@
+.powerhouse-workspace { max-width: 1100px; }
+.powerhouse-workspace h1 { margin-top: 0; }
+.powerhouse-workspace header p, .ph-note { color: #a4b3cb; font-size: 14px; line-height: 1.6; }
+.ph-panel { background: #0d1525; border: 1px solid #1b2942; border-radius: 12px; padding: 22px; margin: 20px 0; }
+.powerhouse-workspace label { display: block; margin: 18px 0 8px; font-weight: 600; }
+.powerhouse-workspace select, .powerhouse-workspace textarea { width: 100%; padding: 12px; color: #eef4ff; background: #080e1a; border: 1px solid #1b2942; border-radius: 8px; font: inherit; }
+.powerhouse-workspace textarea { min-height: 120px; resize: vertical; }
+.powerhouse-workspace button { color: #04141a; background: #00d4b0; border: 0; padding: 12px 18px; border-radius: 8px; cursor: pointer; font-weight: 600; }
+.powerhouse-workspace button:disabled { opacity: .5; cursor: default; }
+.powerhouse-workspace [role=alert] { color: #ff8097; }
+.ph-result, .powerhouse-workspace pre { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.7; font-family: inherit; }
+.ph-result { margin-bottom: 20px; }
+.powerhouse-workspace summary { cursor: pointer; padding: 8px 0; overflow-wrap: anywhere; }

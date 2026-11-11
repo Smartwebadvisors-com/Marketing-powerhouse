@@ -1,4 +1,6 @@
 import { useState, useEffect, useRef, useMemo } from "react";
+import PowerhouseWorkspace from './PowerhouseWorkspace';
+import { coreInstructions } from './powerhouse';
 
 const COLORS = {
   bg: "#080E1A",
@@ -20,6 +22,7 @@ const MODEL = "claude-sonnet-4-20250514";
 const SECTIONS = [
   { id: "clients", label: "Clients", icon: "◔", group: "Overview" },
   { id: "dashboard", label: "Dashboard", icon: "▦", group: "Overview" },
+  { id: "powerhouse", label: "Powerhouse Workflows", icon: "✦", group: "Plan" },
   { id: "brief", label: "Content Brief", icon: "✎", group: "Plan" },
   { id: "generator", label: "Generator", icon: "✦", group: "Create" },
   { id: "bulk", label: "Bulk Generate", icon: "⎘", group: "Create" },
@@ -129,7 +132,7 @@ async function callClaude(apiKey, system, userPrompt, maxTokens = 2048) {
     body: JSON.stringify({
       model: MODEL,
       max_tokens: maxTokens,
-      system,
+      system: `${coreInstructions()}\n\nTask instructions:\n${system}`,
       messages: [{ role: "user", content: userPrompt }],
     }),
   });
@@ -413,7 +416,7 @@ function Dashboard({ library, setActive }) {
         </div>
         <div style={styles.stat}>
           <div style={styles.statLabel}>Tools Available</div>
-          <div style={styles.statValue}>22</div>
+          <div style={styles.statValue}>{SECTIONS.length}</div>
         </div>
         <div style={styles.stat}>
           <div style={styles.statLabel}>Model</div>
@@ -427,6 +430,7 @@ function Dashboard({ library, setActive }) {
         </p>
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
           <Button onClick={() => setActive("brief")}>Start a Brief →</Button>
+          <Button ghost onClick={() => setActive("powerhouse")}>Powerhouse Workflows</Button>
           <Button ghost onClick={() => setActive("generator")}>
             Open Generator
           </Button>
@@ -2816,6 +2820,17 @@ export default function App() {
     switch (active) {
       case "clients": return <ClientsDashboard clients={clients} setClients={setClients} library={library} onOpenClient={openClient} />;
       case "dashboard": return <Dashboard library={library} setActive={setActive} />;
+      case "powerhouse": return <PowerhouseWorkspace
+        key={activeClientId}
+        client={activeClient}
+        brief={brief}
+        generate={(system, prompt, maxTokens) => callClaude(apiKey, system, prompt, maxTokens)}
+        onSave={item => {
+          const next = [...library, item];
+          localStorage.setItem('mp.library', JSON.stringify(next));
+          setLibrary(next);
+        }}
+      />;
       case "brief": return <ContentBrief apiKey={apiKey} brief={brief} setBrief={setBrief} />;
       case "generator": return <Generator apiKey={apiKey} brief={brief} library={library} setLibrary={wrappedSetLibrary} />;
       case "bulk": return <BulkGenerate apiKey={apiKey} brief={brief} library={library} setLibrary={wrappedSetLibrary} />;

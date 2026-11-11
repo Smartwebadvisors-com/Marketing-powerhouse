@@ -16,6 +16,7 @@
   "scripts": {
     "start": "react-scripts start",
     "build": "react-scripts build",
+    "sync:plugin": "node scripts/sync-plugin.cjs",
     "test": "react-scripts test",
     "eject": "react-scripts eject"
   },
