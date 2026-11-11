@@ -33,8 +33,6 @@ const COLORS = {
   good: "#3BE0A6",
 };
 
-const MODEL = "claude-sonnet-4-20250514";
-
 const SECTIONS = [
   { id: "clients", label: "Clients", icon: "◔", group: "Overview" },
   { id: "dashboard", label: "Dashboard", icon: "▦", group: "Overview" },
@@ -142,7 +140,6 @@ async function callClaude(apiKey, system, userPrompt, maxTokens = 2048) {
     method: "POST",
     headers,
     body: JSON.stringify({
-      model: MODEL,
       max_tokens: maxTokens,
       system: `${coreInstructions()}\n\nTask instructions:\n${system}`,
       messages: [{ role: "user", content: userPrompt }],
@@ -416,7 +413,7 @@ function Output({ text, loading }) {
   if (loading) {
     return (
       <div style={styles.output}>
-        <span style={styles.spinner} /> Generating with Claude Sonnet 4...
+        <span style={styles.spinner} /> Generating with Claude...
       </div>
     );
   }
@@ -487,7 +484,7 @@ function Dashboard({ library, setActive }) {
         </div>
         <div style={styles.stat}>
           <div style={styles.statLabel}>Model</div>
-          <div style={{ ...styles.statValue, fontSize: 16, marginTop: 8 }}>Sonnet 4</div>
+          <div style={{ ...styles.statValue, fontSize: 16, marginTop: 8 }}>Claude · server selected</div>
         </div>
       </div>
       <div style={styles.card}>

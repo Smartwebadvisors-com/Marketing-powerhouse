@@ -44,6 +44,12 @@ AI requests use the same-origin `/api/claude` backend. Configure
 `ANTHROPIC_API_KEY` on the server or use the existing personal key control.
 Requests incur provider usage charges. No paid calls are made by automated tests.
 
+The backend selects the newest Sonnet returned by Anthropic's model list for the
+effective API key and caches that choice for five minutes. The browser does not
+pin a model ID. To pin an account-approved model, set `ANTHROPIC_MODEL` in the
+existing server process environment and restart with the updated environment.
+Model discovery errors are reported without attempting a generation request.
+
 Set `STUDIO_PASSWORD` on the server for the existing studio login. Records retain
 the browser copy and sync through `/api/studio` to `STUDIO_DATA_PATH` (default
 `data/studio.json`). Back up this file before deployment. The shared studio
