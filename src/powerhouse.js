@@ -1,4 +1,5 @@
 import bundle from './plugin-bundle.json';
+import { clientFactBlock } from './writerContext';
 
 export const plugin = bundle;
 export const workflows = bundle.workflows.filter(workflow => workflow.id !== 'instructions');
@@ -68,6 +69,7 @@ export function clientContext(client, brief) {
     voice: client.brandVoice || '',
     offer: client.mainOffer || '',
     notes: client.notes || '',
+    brandFacts: clientFactBlock({ client, brief: brief?.brand === client.businessName ? brief : null }),
     brief: brief?.brand === client.businessName ? brief : null,
   };
 }

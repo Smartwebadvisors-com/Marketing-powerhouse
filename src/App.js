@@ -1,6 +1,23 @@
 import { useState, useEffect, useRef, useMemo } from "react";
 import PowerhouseWorkspace from './PowerhouseWorkspace';
 import { coreInstructions } from './powerhouse';
+import { imageStudioLink, studioSnapshot, studioSyncPlan } from "./studioSync";
+import {
+  audienceReadPrompt,
+  AUDIENCE_READ_SYSTEM,
+  clientFactBlock,
+  DRAFT_SYSTEM,
+  draftBrief,
+  goalFromFacts,
+  PASS_SCORE,
+  parseRating,
+  platformShape,
+  ratingPrompt,
+  rewritePrompt,
+  RATING_SYSTEM,
+  voiceCardPrompt,
+  VOICE_CARD_SYSTEM,
+} from "./writerContext";
 
 const COLORS = {
   bg: "#080E1A",
@@ -16,7 +33,6 @@ const COLORS = {
   good: "#3BE0A6",
 };
 
-const API_URL = "https://api.anthropic.com/v1/messages";
 const MODEL = "claude-sonnet-4-20250514";
 
 const SECTIONS = [
@@ -120,15 +136,11 @@ function downloadCSV(filename, headers, rows) {
 }
 
 async function callClaude(apiKey, system, userPrompt, maxTokens = 2048) {
-  if (!apiKey) throw new Error("Missing API key. Open Settings (top right) and paste your Anthropic API key.");
-  const res = await fetch(API_URL, {
+  const headers = { "Content-Type": "application/json" };
+  if (apiKey) headers["x-api-key"] = apiKey;
+  const res = await fetch("/api/claude", {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-api-key": apiKey,
-      "anthropic-version": "2023-06-01",
-      "anthropic-dangerous-direct-browser-access": "true",
-    },
+    headers,
     body: JSON.stringify({
       model: MODEL,
       max_tokens: maxTokens,
@@ -136,12 +148,67 @@ async function callClaude(apiKey, system, userPrompt, maxTokens = 2048) {
       messages: [{ role: "user", content: userPrompt }],
     }),
   });
-  if (!res.ok) {
-    const txt = await res.text();
-    throw new Error(`API ${res.status}: ${txt}`);
+  const txt = await res.text();
+  let data = null;
+  try {
+    data = txt ? JSON.parse(txt) : null;
+  } catch {
+    data = null;
   }
-  const data = await res.json();
-  return data.content?.map((c) => c.text).join("\n") || "";
+  if (!res.ok) {
+    const message = typeof data?.error === "string"
+      ? data.error
+      : data?.error?.message || txt || `API ${res.status}`;
+    throw new Error(message);
+  }
+  return data?.content?.map((c) => c.text).join("\n") || "";
+}
+
+async function writeFromAudience({ apiKey, facts, task, goal, maxTokens = 2500 }) {
+  const jobGoal = goal || goalFromFacts(facts);
+  const read = await callClaude(apiKey, AUDIENCE_READ_SYSTEM, audienceReadPrompt(facts), 1200);
+  let draft = await callClaude(apiKey, DRAFT_SYSTEM, draftBrief(facts, read, task, jobGoal), maxTokens);
+  const ratingText = await callClaude(apiKey, RATING_SYSTEM, ratingPrompt({ facts, read, draft, goal: jobGoal }), 600);
+  const rating = parseRating(ratingText);
+  const weak = rating.score == null || rating.score < PASS_SCORE;
+  let rewritten = false;
+  if (weak) {
+    draft = await callClaude(
+      apiKey,
+      DRAFT_SYSTEM,
+      rewritePrompt({ facts, read, draft, rating, goal: jobGoal }),
+      maxTokens
+    );
+    rewritten = true;
+  }
+  return { read, draft, rating, rewritten };
+}
+
+function AudienceRead({ text }) {
+  if (!text) return null;
+  return (
+    <div style={styles.card}>
+      <h3 style={{ marginTop: 0 }}>Audience read</h3>
+      <div style={{ whiteSpace: "pre-wrap", fontSize: 13.5, lineHeight: 1.55 }}>{text}</div>
+    </div>
+  );
+}
+
+function DraftScore({ rating, rewritten }) {
+  if (!rating) return null;
+  const score = rating.score;
+  return (
+    <div style={styles.card}>
+      <h3 style={{ marginTop: 0 }}>Content rating</h3>
+      <div style={{ fontSize: 13.5, lineHeight: 1.55 }}>
+        {score == null ? "The draft was checked." : `Score ${score} out of 100.`}
+        {rewritten
+          ? " It was under 75, so it was rewritten once. This is the stronger version."
+          : " It was strong enough to keep."}
+      </div>
+      {rating.why ? <div style={{ marginTop: 8, fontSize: 13.5, lineHeight: 1.55 }}>{rating.why}</div> : null}
+    </div>
+  );
 }
 
 function useLocalState(key, initial) {
@@ -456,8 +523,11 @@ function Dashboard({ library, setActive }) {
   );
 }
 
-function ContentBrief({ apiKey, brief, setBrief }) {
+function ContentBrief({ apiKey, brief, setBrief, client, voice }) {
   const [out, setOut] = useState("");
+  const [read, setRead] = useState("");
+  const [rating, setRating] = useState(null);
+  const [rewritten, setRewritten] = useState(false);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState("");
 
@@ -465,19 +535,20 @@ function ContentBrief({ apiKey, brief, setBrief }) {
     setLoading(true);
     setErr("");
     try {
-      const sys = "You are a senior brand strategist at a top-tier creative agency.";
-      const prompt = `Build a complete content brief.
+      const facts = clientFactBlock({ client, brief, voice });
+      const result = await writeFromAudience({
+        apiKey,
+        facts,
+        goal: brief.objective || client?.goal,
+        maxTokens: 2500,
+        task: `Build a complete content brief.
 
-Brand: ${brief.brand}
-Audience: ${brief.audience}
-Objective: ${brief.objective}
-Tone: ${brief.tone}
-Key Message: ${brief.keyMessage}
-Constraints: ${brief.constraints}
-
-Deliver: (1) positioning statement, (2) three message pillars, (3) tone guardrails, (4) success metrics, (5) creative angles (5 ideas).`;
-      const txt = await callClaude(apiKey, sys, prompt);
-      setOut(txt);
+Deliver: (1) positioning statement, (2) three message pillars, (3) tone guardrails, (4) success metrics, (5) creative angles (5 ideas). Use the audience read, including the psychology it worked out. Do the one job. Do not invent a named customer, a statistic, or a quote.`,
+      });
+      setRead(result.read);
+      setRating(result.rating);
+      setRewritten(result.rewritten);
+      setOut(result.draft);
     } catch (e) {
       setErr(e.message);
     }
@@ -516,36 +587,55 @@ Deliver: (1) positioning statement, (2) three message pillars, (3) tone guardrai
         <Button onClick={run} loading={loading}>Generate Strategic Brief</Button>
         {err && <div style={{ color: COLORS.danger, marginTop: 12, fontSize: 13 }}>{err}</div>}
       </div>
+      <AudienceRead text={read} />
+      <DraftScore rating={rating} rewritten={rewritten} />
       <Output text={out} loading={loading} />
     </div>
   );
 }
 
-function Generator({ apiKey, brief, library, setLibrary }) {
+function Generator({ apiKey, brief, library, setLibrary, client, voice }) {
   const [platform, setPlatform] = useState("LinkedIn");
   const [topic, setTopic] = useState("");
   const [variants, setVariants] = useState(3);
   const [cta, setCta] = useState("Learn more");
   const [out, setOut] = useState("");
+  const [read, setRead] = useState("");
+  const [rating, setRating] = useState(null);
+  const [rewritten, setRewritten] = useState(false);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState("");
 
   const run = async () => {
     setLoading(true);
     setErr("");
+    setRead("");
+    setRating(null);
     try {
-      const sys = `You are an expert social media copywriter for ${brief.brand || "a leading brand"}. Tone: ${brief.tone}. Audience: ${brief.audience}.`;
-      const prompt = `Write ${variants} distinct ${platform} post variants on: "${topic}".
+      const facts = clientFactBlock({ client, brief, voice });
+      const result = await writeFromAudience({
+        apiKey,
+        facts,
+        goal: brief.objective || client?.goal,
+        maxTokens: 2500,
+        task: `Write ${variants} distinct ${platform} post variants on: "${topic}".
 
-Each post should:
-- Hook in the first line
-- Match platform best practices and length
-- End with this CTA: "${cta}"
-- Include 3-5 relevant hashtags (for platforms that use them)
+Shape for this platform:
+${platformShape(platform)}
 
-Label each variant clearly: "Variant 1", "Variant 2", etc.`;
-      const txt = await callClaude(apiKey, sys, prompt, 2500);
-      setOut(txt);
+Each post must:
+- Use the call to action "${cta}" only when the job is leads and sales. If the job is engagement, end with one question. If the job is authority, do not sell.
+- Use the audience read, including the environment, socioeconomic pressure, class, history, and psychology it worked out
+- Carry one value from the voice card when one is on file
+- Use a concrete detail from the owner only when one is on file
+- Not invent a named customer, a statistic, or a quote
+
+Label each variant clearly: "Variant 1", "Variant 2", etc.`,
+      });
+      setRead(result.read);
+      setRating(result.rating);
+      setRewritten(result.rewritten);
+      setOut(result.draft);
     } catch (e) {
       setErr(e.message);
     }
@@ -582,6 +672,9 @@ Label each variant clearly: "Variant 1", "Variant 2", etc.`;
         <Field label="Call to Action">
           <input style={styles.input} value={cta} onChange={(e) => setCta(e.target.value)} />
         </Field>
+        <div style={{ color: COLORS.muted, fontSize: 12, marginBottom: 12 }}>
+          {client ? "Studies this client's audience, including psychology, then writes for one job: a reply, authority, or a sale. You do not fill in environment, class, or history." : "No client selected. Open a client so the writer can study that audience."}
+        </div>
         <div style={{ display: "flex", gap: 10 }}>
           <Button onClick={run} loading={loading}>Generate</Button>
           {out && <Button ghost onClick={save}>Save to Library</Button>}
@@ -589,30 +682,50 @@ Label each variant clearly: "Variant 1", "Variant 2", etc.`;
         </div>
         {err && <div style={{ color: COLORS.danger, marginTop: 12, fontSize: 13 }}>{err}</div>}
       </div>
+      <AudienceRead text={read} />
+      <DraftScore rating={rating} rewritten={rewritten} />
       <Output text={out} loading={loading} />
     </div>
   );
 }
 
-function BulkGenerate({ apiKey, brief, library, setLibrary }) {
+function BulkGenerate({ apiKey, brief, library, setLibrary, client, voice }) {
   const [topics, setTopics] = useState("");
   const [platform, setPlatform] = useState("LinkedIn");
   const [out, setOut] = useState("");
+  const [read, setRead] = useState("");
+  const [rating, setRating] = useState(null);
+  const [rewritten, setRewritten] = useState(false);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState("");
 
   const run = async () => {
     setLoading(true);
     setErr("");
+    setRead("");
+    setRating(null);
     try {
       const list = topics.split("\n").filter((t) => t.trim());
-      const sys = `You are a prolific ${platform} copywriter. Brand tone: ${brief.tone}.`;
-      const prompt = `Write a separate ${platform} post for each topic below. Number them. Each post must be polished and ready to publish.
+      const facts = clientFactBlock({ client, brief, voice });
+      const result = await writeFromAudience({
+        apiKey,
+        facts,
+        goal: brief.objective || client?.goal,
+        maxTokens: 4000,
+        task: `Write a separate ${platform} post for each topic below. Number them.
+
+Shape for this platform:
+${platformShape(platform)}
+
+Each post must use the audience read, including the psychology it worked out, and do the one job. Do not invent a named customer, a statistic, or a quote.
 
 Topics:
-${list.map((t, i) => `${i + 1}. ${t}`).join("\n")}`;
-      const txt = await callClaude(apiKey, sys, prompt, 4000);
-      setOut(txt);
+${list.map((t, i) => `${i + 1}. ${t}`).join("\n")}`,
+      });
+      setRead(result.read);
+      setRating(result.rating);
+      setRewritten(result.rewritten);
+      setOut(result.draft);
     } catch (e) {
       setErr(e.message);
     }
@@ -659,6 +772,8 @@ ${list.map((t, i) => `${i + 1}. ${t}`).join("\n")}`;
         )}
         {err && <div style={{ color: COLORS.danger, marginTop: 12, fontSize: 13 }}>{err}</div>}
       </div>
+      <AudienceRead text={read} />
+      <DraftScore rating={rating} rewritten={rewritten} />
       {loading && <Output text={out} loading={loading} />}
       {!loading && items.length > 0 && (
         <div style={{ marginTop: 16 }}>
@@ -681,11 +796,14 @@ ${list.map((t, i) => `${i + 1}. ${t}`).join("\n")}`;
   );
 }
 
-function CampaignBuilder({ apiKey, brief }) {
+function CampaignBuilder({ apiKey, brief, client, voice }) {
   const [theme, setTheme] = useState("");
   const [duration, setDuration] = useState("2 weeks");
   const [platforms, setPlatforms] = useState("Instagram, Facebook, LinkedIn, TikTok, YouTube Shorts, X/Twitter, Threads, Pinterest");
   const [out, setOut] = useState("");
+  const [read, setRead] = useState("");
+  const [rating, setRating] = useState(null);
+  const [rewritten, setRewritten] = useState(false);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState("");
 
@@ -693,23 +811,31 @@ function CampaignBuilder({ apiKey, brief }) {
     setLoading(true);
     setErr("");
     try {
-      const sys = "You are a senior campaign strategist at a top creative agency.";
-      const prompt = `Build a multi-platform campaign plan.
+      const facts = clientFactBlock({ client, brief, voice });
+      const result = await writeFromAudience({
+        apiKey,
+        facts,
+        goal: brief.objective || client?.goal,
+        maxTokens: 3000,
+        task: `Build a multi-platform campaign plan.
 
-Brand: ${brief.brand}
-Audience: ${brief.audience}
-Campaign Theme: ${theme}
+Campaign theme: ${theme}
 Duration: ${duration}
 Platforms: ${platforms}
 
 Deliver:
 1. Big idea (one sentence)
 2. Week-by-week content arc
-3. Per-platform post breakdown with examples
+3. Per-platform post breakdown with examples that use the client facts
 4. KPIs to track
-5. Risk / mitigation table`;
-      const txt = await callClaude(apiKey, sys, prompt, 3000);
-      setOut(txt);
+5. Risk / mitigation table
+
+Every example does the one job and uses the psychology in the audience read. Do not invent a named customer, a statistic, or a quote.`,
+      });
+      setRead(result.read);
+      setRating(result.rating);
+      setRewritten(result.rewritten);
+      setOut(result.draft);
     } catch (e) {
       setErr(e.message);
     }
@@ -734,6 +860,8 @@ Deliver:
         <Button onClick={run} loading={loading}>Build Campaign</Button>
         {err && <div style={{ color: COLORS.danger, marginTop: 12, fontSize: 13 }}>{err}</div>}
       </div>
+      <AudienceRead text={read} />
+      <DraftScore rating={rating} rewritten={rewritten} />
       <Output text={out} loading={loading} />
     </div>
   );
@@ -1492,9 +1620,10 @@ Deliver:
   );
 }
 
-function SavedLibrary({ library, setLibrary }) {
+function SavedLibrary({ library, setLibrary, clients, imageStudioUrl }) {
   const [filter, setFilter] = useState("All");
   const filtered = filter === "All" ? library : library.filter((l) => l.platform === filter);
+  const clientFor = (item) => (clients || []).find((c) => c.id === item.clientId) || null;
 
   return (
     <div>
@@ -1504,18 +1633,35 @@ function SavedLibrary({ library, setLibrary }) {
         {filtered.length === 0 ? (
           <div style={{ color: COLORS.muted, fontSize: 13 }}>Nothing saved yet. Generate something and click Save.</div>
         ) : (
-          filtered.map((it, i) => (
-            <div key={i} style={{ background: COLORS.cardAlt, padding: 14, borderRadius: 8, marginBottom: 10 }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-                <div>
-                  <span style={styles.pill}>{it.platform}</span>
-                  <span style={{ fontSize: 12, color: COLORS.muted, marginLeft: 8 }}>{it.savedAt?.slice(0, 10)}</span>
-                </div>
-                <button style={{ ...styles.btnGhost, padding: "4px 10px", fontSize: 11 }} onClick={() => setLibrary(library.filter((_, idx) => library.indexOf(it) !== idx))}>Delete</button>
+          <>
+            {!imageStudioUrl && (
+              <div style={{ color: COLORS.muted, fontSize: 13, marginBottom: 12 }}>
+                Image Studio address is not set. Add IMAGE_STUDIO_URL on the server to make images from a saved post.
               </div>
-              <div style={{ fontSize: 13, whiteSpace: "pre-wrap" }}>{it.text}</div>
-            </div>
-          ))
+            )}
+            {filtered.map((it, i) => {
+              const href = imageStudioLink(imageStudioUrl, it, clientFor(it));
+              return (
+                <div key={i} style={{ background: COLORS.cardAlt, padding: 14, borderRadius: 8, marginBottom: 10 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, gap: 8 }}>
+                    <div>
+                      <span style={styles.pill}>{it.platform}</span>
+                      <span style={{ fontSize: 12, color: COLORS.muted, marginLeft: 8 }}>{it.savedAt?.slice(0, 10)}</span>
+                    </div>
+                    <div style={{ display: "flex", gap: 8 }}>
+                      {href ? (
+                        <a href={href} target="_blank" rel="noreferrer" style={{ ...styles.btn, padding: "4px 10px", fontSize: 11, textDecoration: "none" }}>Make the image</a>
+                      ) : (
+                        <button type="button" disabled style={{ ...styles.btn, padding: "4px 10px", fontSize: 11, opacity: 0.55, cursor: "default" }}>Make the image</button>
+                      )}
+                      <button style={{ ...styles.btnGhost, padding: "4px 10px", fontSize: 11 }} onClick={() => setLibrary(library.filter((_, idx) => library.indexOf(it) !== idx))}>Delete</button>
+                    </div>
+                  </div>
+                  <div style={{ fontSize: 13, whiteSpace: "pre-wrap" }}>{it.text}</div>
+                </div>
+              );
+            })}
+          </>
         )}
       </div>
     </div>
@@ -1704,7 +1850,7 @@ function copyToClipboard(text) {
   return Promise.resolve();
 }
 
-function BlogGeneratorTab({ apiKey, activeClient, blogs, setBlogs, onBlogGenerated }) {
+function BlogGeneratorTab({ apiKey, activeClient, blogs, setBlogs, onBlogGenerated, voice }) {
   const [topic, setTopic] = useState("");
   const [keyword, setKeyword] = useState("");
   const [audience, setAudience] = useState(activeClient?.targetAudience || "");
@@ -1713,6 +1859,9 @@ function BlogGeneratorTab({ apiKey, activeClient, blogs, setBlogs, onBlogGenerat
   const [blogType, setBlogType] = useState("How-To Guide");
   const [lengthLabel, setLengthLabel] = useState(BLOG_LENGTHS[1].label);
   const [raw, setRaw] = useState("");
+  const [read, setRead] = useState("");
+  const [rating, setRating] = useState(null);
+  const [rewritten, setRewritten] = useState(false);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState("");
   const [msg, setMsg] = useState("");
@@ -1730,22 +1879,31 @@ function BlogGeneratorTab({ apiKey, activeClient, blogs, setBlogs, onBlogGenerat
     setLoading(true);
     setErr("");
     setRaw("");
+    setRead("");
+    setRating(null);
     try {
-      const sys = `You are an expert blog writer and SEO strategist for ${business || "a leading brand"}. Write in a ${tone} tone.`;
-      const prompt = `Write a complete, polished ${blogType} blog post.
+      const facts = clientFactBlock({
+        client: activeClient,
+        brief: { brand: business, audience, tone, objective: activeClient?.goal, constraints: activeClient?.notes },
+        voice,
+      });
+      const result = await writeFromAudience({
+        apiKey,
+        facts,
+        goal: activeClient?.goal,
+        maxTokens: 6000,
+        task: `Write a complete, polished ${blogType} blog post.
 
 Topic: ${topic}
 Target Keyword: ${keyword}
-Audience: ${audience}
-Business: ${business}
 Approximate length: ${lengthWords} words
 
 Structure the post with:
 - A single H1 title using "# "
-- An engaging intro paragraph (hook + promise)
-- Multiple H2 sections using "## " with substantive body content
+- The answer in the first two paragraphs
+- Multiple H2 sections using "## " built from this client's world
 - A clear conclusion
-- A persuasive call-to-action paragraph at the end
+- Mention the offer once, near the end, only when the job is leads and sales and an offer is on file
 
 After the blog, return SEO metadata using these EXACT markers:
 
@@ -1761,10 +1919,13 @@ SEO meta description (max 155 characters, compelling, includes the keyword)
 exactly 5 comma-separated tags relevant for content tagging and search
 [/TAGS]
 
-Return ONLY the blog (in markdown) followed by the three tagged metadata blocks. No preamble.`;
-      const txt = await callClaude(apiKey, sys, prompt, 6000);
-      setRaw(txt);
-      const blog = txt.split(/\[META_TITLE\]/)[0].trim();
+Return ONLY the blog (in markdown) followed by the three tagged metadata blocks. No preamble.`,
+      });
+      setRead(result.read);
+      setRating(result.rating);
+      setRewritten(result.rewritten);
+      setRaw(result.draft);
+      const blog = result.draft.split(/\[META_TITLE\]/)[0].trim();
       if (onBlogGenerated && blog) onBlogGenerated(blog);
     } catch (e) {
       setErr(e.message);
@@ -1891,6 +2052,8 @@ Return ONLY the blog (in markdown) followed by the three tagged metadata blocks.
       </div>
 
       {loading && <Output loading={true} />}
+      <AudienceRead text={read} />
+      <DraftScore rating={rating} rewritten={rewritten} />
 
       {!loading && blogPart && (
         <>
@@ -1943,7 +2106,7 @@ Return ONLY the blog (in markdown) followed by the three tagged metadata blocks.
   );
 }
 
-function BlogToSocialTab({ apiKey, lastBlog, library, setLibrary }) {
+function BlogToSocialTab({ apiKey, lastBlog, library, setLibrary, client, voice }) {
   const [content, setContent] = useState("");
   const [raw, setRaw] = useState("");
   const [loading, setLoading] = useState(false);
@@ -1965,8 +2128,12 @@ function BlogToSocialTab({ apiKey, lastBlog, library, setLibrary }) {
     setErr("");
     setRaw("");
     try {
-      const sys = "You are an expert social media copywriter. Convert long-form content into platform-native posts that respect each platform's voice, length, and conventions.";
+      const facts = clientFactBlock({ client, voice });
+      const sys = "You are an expert social media copywriter. Convert long-form content into platform-native posts. Use only the client facts you are given.";
       const prompt = `Given the blog post below, create platform-specific social posts.
+
+CLIENT FACTS:
+${facts}
 
 Use EXACTLY these markers (nothing outside them):
 
@@ -2095,7 +2262,7 @@ ${content}`;
   );
 }
 
-function SEOBriefTab({ apiKey, activeClient, blogs, setBlogs }) {
+function SEOBriefTab({ apiKey, activeClient, blogs, setBlogs, voice }) {
   const [keyword, setKeyword] = useState("");
   const [industry, setIndustry] = useState(activeClient?.industry || "");
   const [audience, setAudience] = useState(activeClient?.targetAudience || "");
@@ -2111,13 +2278,20 @@ function SEOBriefTab({ apiKey, activeClient, blogs, setBlogs }) {
     setLoading(true);
     setErr("");
     try {
-      const sys = "You are an SEO content strategist. Produce briefs that are specific, search-aligned, and immediately actionable for writers.";
+      const facts = clientFactBlock({
+        client: activeClient,
+        brief: { audience, brand: activeClient?.businessName },
+        voice,
+      });
+      const sys = "You are an SEO content strategist. Produce briefs that are specific, search-aligned, and immediately actionable for writers. Use only the client facts you are given.";
       const prompt = `Create a complete SEO content brief for the target keyword below.
 
 Target Keyword: ${keyword}
 Industry: ${industry}
-Audience: ${audience}
 ${competitor ? `Competitor URL to consider: ${competitor}` : ""}
+
+CLIENT FACTS:
+${facts}
 
 Deliver the brief with these sections (use clear bold headings):
 
@@ -2388,7 +2562,7 @@ function BlogCalendarTab({ clients, activeClient, blogCalendar, setBlogCalendar 
   );
 }
 
-function BlogStudio({ apiKey, activeClient, clients, blogs, setBlogs, library, setLibrary, blogCalendar, setBlogCalendar }) {
+function BlogStudio({ apiKey, activeClient, clients, blogs, setBlogs, library, setLibrary, blogCalendar, setBlogCalendar, voice }) {
   const [tab, setTab] = useState("generator");
   const [lastBlog, setLastBlog] = useState(() => {
     const lastSaved = [...blogs].reverse().find((b) => b.type === "blog");
@@ -2437,6 +2611,7 @@ function BlogStudio({ apiKey, activeClient, clients, blogs, setBlogs, library, s
           blogs={blogs}
           setBlogs={setBlogs}
           onBlogGenerated={setLastBlog}
+          voice={voice}
         />
       )}
       {tab === "social" && (
@@ -2445,6 +2620,8 @@ function BlogStudio({ apiKey, activeClient, clients, blogs, setBlogs, library, s
           lastBlog={lastBlog}
           library={library}
           setLibrary={setLibrary}
+          client={activeClient}
+          voice={voice}
         />
       )}
       {tab === "seo" && (
@@ -2453,6 +2630,7 @@ function BlogStudio({ apiKey, activeClient, clients, blogs, setBlogs, library, s
           activeClient={activeClient}
           blogs={blogs}
           setBlogs={setBlogs}
+          voice={voice}
         />
       )}
       {tab === "calendar" && (
@@ -2476,15 +2654,41 @@ const EMPTY_CLIENT = {
   website: "",
   targetAudience: "",
   brandVoice: "Professional",
+  brandColors: "",
   goal: "Awareness",
   platforms: [],
   mainOffer: "",
   notes: "",
+  whatTheyDo: "",
+  whoItsFor: "",
+  refuses: "",
+  industryGripe: "",
+  customerStory: "",
+  messySample: "",
+  voiceCard: "",
 };
 
-function ClientForm({ initial, onSave, onCancel }) {
+function ClientForm({ initial, onSave, onCancel, apiKey }) {
   const [c, setC] = useState(() => ({ ...EMPTY_CLIENT, ...(initial || {}) }));
+  const [cardLoading, setCardLoading] = useState(false);
+  const [cardErr, setCardErr] = useState("");
   const set = (k, v) => setC((prev) => ({ ...prev, [k]: v }));
+  const buildVoiceCard = async () => {
+    const answers = [c.whatTheyDo, c.whoItsFor, c.refuses, c.industryGripe, c.customerStory, c.messySample, c.targetAudience, c.mainOffer];
+    if (!answers.some((value) => String(value || "").trim())) {
+      setCardErr("Answer at least one question in plain words first.");
+      return;
+    }
+    setCardLoading(true);
+    setCardErr("");
+    try {
+      const card = await callClaude(apiKey, VOICE_CARD_SYSTEM, voiceCardPrompt(c), 1200);
+      setC((prev) => ({ ...prev, voiceCard: card }));
+    } catch (e) {
+      setCardErr(e.message);
+    }
+    setCardLoading(false);
+  };
   const togglePlatform = (p) => {
     setC((prev) => {
       const has = prev.platforms.includes(p);
@@ -2543,7 +2747,7 @@ function ClientForm({ initial, onSave, onCancel }) {
           </Field>
         </div>
         <Field label="Target Audience">
-          <textarea style={{ ...styles.textarea, minHeight: 70 }} value={c.targetAudience} onChange={(e) => set("targetAudience", e.target.value)} placeholder="B2B founders, 30-50, US/EU" />
+          <textarea style={{ ...styles.textarea, minHeight: 70 }} value={c.targetAudience} onChange={(e) => set("targetAudience", e.target.value)} placeholder="Who they sell to, in plain words" />
         </Field>
         <div style={styles.row}>
           <Field label="Brand Voice">
@@ -2553,6 +2757,9 @@ function ClientForm({ initial, onSave, onCancel }) {
             <Select value={c.goal} onChange={(v) => set("goal", v)} options={GOALS} />
           </Field>
         </div>
+        <Field label="Brand Colors">
+          <input style={styles.input} value={c.brandColors || ""} onChange={(e) => set("brandColors", e.target.value)} placeholder="navy #001122, cream #F5EFE3" />
+        </Field>
         <Field label="Platforms">
           <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
             {PLATFORMS.map((p) => {
@@ -2586,6 +2793,35 @@ function ClientForm({ initial, onSave, onCancel }) {
         <Field label="Notes">
           <textarea style={{ ...styles.textarea, minHeight: 70 }} value={c.notes} onChange={(e) => set("notes", e.target.value)} placeholder="Compliance, banned words, mandatories, internal notes..." />
         </Field>
+        <div style={{ borderTop: `1px solid ${COLORS.border}`, paddingTop: 16, marginTop: 4 }}>
+          <h3 style={{ margin: "0 0 6px", fontSize: 16 }}>Voice, in their words</h3>
+          <p style={{ color: COLORS.muted, fontSize: 13, marginTop: 0, lineHeight: 1.5 }}>
+            Owners often cannot name their voice. Answer in plain words. The studio writes a voice card from the values it hears. Correct one line if it is wrong.
+          </p>
+          <Field label="What do you do?">
+            <textarea style={{ ...styles.textarea, minHeight: 70 }} value={c.whatTheyDo} onChange={(e) => set("whatTheyDo", e.target.value)} placeholder="We run a weeknight dinner for independent cafes" />
+          </Field>
+          <Field label="Who is it for?">
+            <textarea style={{ ...styles.textarea, minHeight: 70 }} value={c.whoItsFor} onChange={(e) => set("whoItsFor", e.target.value)} placeholder="Cafe owners who cook the food themselves" />
+          </Field>
+          <Field label="What do you refuse to do?">
+            <textarea style={{ ...styles.textarea, minHeight: 70 }} value={c.refuses} onChange={(e) => set("refuses", e.target.value)} placeholder="We do not discount the food to fill seats" />
+          </Field>
+          <Field label="What bothers you about your industry?">
+            <textarea style={{ ...styles.textarea, minHeight: 70 }} value={c.industryGripe} onChange={(e) => set("industryGripe", e.target.value)} placeholder="Everyone copies the same lunch special" />
+          </Field>
+          <Field label="One customer story, in your words">
+            <textarea style={{ ...styles.textarea, minHeight: 70 }} value={c.customerStory} onChange={(e) => set("customerStory", e.target.value)} placeholder="A cafe owner told us Tuesday used to be empty" />
+          </Field>
+          <Field label="Paste a messy page or email (optional)">
+            <textarea style={{ ...styles.textarea, minHeight: 90 }} value={c.messySample} onChange={(e) => set("messySample", e.target.value)} placeholder="Paste a rough about page, a text, or an email" />
+          </Field>
+          <Button onClick={buildVoiceCard} loading={cardLoading}>Build voice card</Button>
+          {cardErr && <div style={{ color: COLORS.danger, marginTop: 12, fontSize: 13 }}>{cardErr}</div>}
+          <Field label="Voice card">
+            <textarea style={{ ...styles.textarea, minHeight: 140 }} value={c.voiceCard} onChange={(e) => set("voiceCard", e.target.value)} placeholder="The card appears here. Correct one line if it is wrong." />
+          </Field>
+        </div>
         <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 6 }}>
           <Button ghost onClick={onCancel}>Cancel</Button>
           <Button onClick={submit}>{initial?.id ? "Save Changes" : "Create Client"}</Button>
@@ -2632,6 +2868,7 @@ function ClientCard({ client, contentCount, onOpen, onEdit, onArchive }) {
         <div>
           <div style={{ color: COLORS.muted, textTransform: "uppercase", letterSpacing: 0.5, fontSize: 10, marginBottom: 2 }}>Voice</div>
           <div style={{ color: COLORS.white }}>{client.brandVoice || "—"}</div>
+          {client.voiceCard ? <div style={{ fontSize: 11, color: COLORS.teal, marginTop: 4 }}>Voice card ready</div> : null}
         </div>
         <div>
           <div style={{ color: COLORS.muted, textTransform: "uppercase", letterSpacing: 0.5, fontSize: 10, marginBottom: 2 }}>Content</div>
@@ -2653,7 +2890,7 @@ function ClientCard({ client, contentCount, onOpen, onEdit, onArchive }) {
   );
 }
 
-function ClientsDashboard({ clients, setClients, library, onOpenClient }) {
+function ClientsDashboard({ clients, setClients, library, onOpenClient, apiKey }) {
   const [query, setQuery] = useState("");
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState(null);
@@ -2752,6 +2989,7 @@ function ClientsDashboard({ clients, setClients, library, onOpenClient }) {
 
       {showForm && (
         <ClientForm
+          apiKey={apiKey}
           initial={editing}
           onSave={saveClient}
           onCancel={() => { setShowForm(false); setEditing(null); }}
@@ -2767,6 +3005,7 @@ export default function App() {
   const [active, setActive] = useLocalState("mp.active", "clients");
   const [apiKey, setApiKey] = useLocalState("mp.apiKey", "");
   const [showKey, setShowKey] = useState(false);
+  const [serverKeyReady, setServerKeyReady] = useState(false);
   const [brief, setBrief] = useLocalState("mp.brief", {
     brand: "",
     audience: "",
@@ -2785,6 +3024,109 @@ export default function App() {
   const [voice, setVoice] = useLocalState("mp.voice", { samples: "", profile: "" });
   const [blogs, setBlogs] = useLocalState("mp.blogs", []);
   const [blogCalendar, setBlogCalendar] = useLocalState("mp.blogCalendar", []);
+  const [imageStudioUrl, setImageStudioUrl] = useState("");
+  const [syncReady, setSyncReady] = useState(false);
+
+  const adoptStudio = (data) => {
+    setClients(Array.isArray(data.clients) ? data.clients : []);
+    setActiveClientId(typeof data.activeClientId === "string" ? data.activeClientId : "");
+    if (data.brief && typeof data.brief === "object") setBrief(data.brief);
+    setLibrary(Array.isArray(data.library) ? data.library : []);
+    setApprovals(Array.isArray(data.approvals) ? data.approvals : []);
+    setCalendar(Array.isArray(data.calendar) ? data.calendar : []);
+    setTracking(Array.isArray(data.tracking) ? data.tracking : []);
+    if (Array.isArray(data.templates) && data.templates.length > 0) setTemplates(data.templates);
+    if (data.voice && typeof data.voice === "object") {
+      setVoice({ samples: data.voice.samples || "", profile: data.voice.profile || "" });
+    }
+    setBlogs(Array.isArray(data.blogs) ? data.blogs : []);
+    setBlogCalendar(Array.isArray(data.blogCalendar) ? data.blogCalendar : []);
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+    if (typeof fetch !== "function") return undefined;
+    const local = studioSnapshot({
+      clients,
+      activeClientId,
+      brief,
+      library,
+      approvals,
+      calendar,
+      tracking,
+      templates,
+      voice,
+      blogs,
+      blogCalendar,
+    });
+    (async () => {
+      try {
+        const statusRes = await fetch("/api/claude/status");
+        const status = statusRes.ok ? await statusRes.json() : null;
+        if (!cancelled) setServerKeyReady(Boolean(status?.configured));
+      } catch {
+        if (!cancelled) setServerKeyReady(false);
+      }
+      try {
+        const configRes = await fetch("/api/config");
+        const config = configRes.ok ? await configRes.json() : null;
+        if (!cancelled) setImageStudioUrl(typeof config?.imageStudioUrl === "string" ? config.imageStudioUrl : "");
+      } catch {
+        if (!cancelled) setImageStudioUrl("");
+      }
+      let server = null;
+      try {
+        const studioRes = await fetch("/api/studio");
+        if (studioRes.ok) server = await studioRes.json();
+      } catch {
+        server = null;
+      }
+      if (cancelled) return;
+      const plan = studioSyncPlan(server, local);
+      if (plan === "adopt") adoptStudio(server);
+      if (plan !== "offline") setSyncReady(true);
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // Hydrate once from the copy already in this browser, then keep the server copy.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (!syncReady || typeof fetch !== "function") return undefined;
+    const handle = setTimeout(() => {
+      fetch("/api/studio", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(studioSnapshot({
+          clients,
+          activeClientId,
+          brief,
+          library,
+          approvals,
+          calendar,
+          tracking,
+          templates,
+          voice,
+          blogs,
+          blogCalendar,
+        })),
+      }).catch(() => {});
+    }, 400);
+    return () => clearTimeout(handle);
+  }, [syncReady, clients, activeClientId, brief, library, approvals, calendar, tracking, templates, voice, blogs, blogCalendar]);
+
+  const signOut = async () => {
+    try {
+      await fetch("/api/logout", { method: "POST" });
+    } catch {
+      /* reload still returns to the password page when the cookie is missing */
+    }
+    window.location.reload();
+  };
+
+  const keyIsSet = Boolean((apiKey || "").trim()) || serverKeyReady;
 
   const activeClient = useMemo(
     () => clients.find((c) => c.id === activeClientId) || null,
@@ -2818,7 +3160,7 @@ export default function App() {
 
   const renderSection = () => {
     switch (active) {
-      case "clients": return <ClientsDashboard clients={clients} setClients={setClients} library={library} onOpenClient={openClient} />;
+      case "clients": return <ClientsDashboard clients={clients} setClients={setClients} library={library} onOpenClient={openClient} apiKey={apiKey} />;
       case "dashboard": return <Dashboard library={library} setActive={setActive} />;
       case "powerhouse": return <PowerhouseWorkspace
         key={activeClientId}
@@ -2831,11 +3173,11 @@ export default function App() {
           setLibrary(next);
         }}
       />;
-      case "brief": return <ContentBrief apiKey={apiKey} brief={brief} setBrief={setBrief} />;
-      case "generator": return <Generator apiKey={apiKey} brief={brief} library={library} setLibrary={wrappedSetLibrary} />;
-      case "bulk": return <BulkGenerate apiKey={apiKey} brief={brief} library={library} setLibrary={wrappedSetLibrary} />;
-      case "campaign": return <CampaignBuilder apiKey={apiKey} brief={brief} />;
-      case "blog": return <BlogStudio apiKey={apiKey} activeClient={activeClient} clients={clients} blogs={blogs} setBlogs={setBlogs} library={library} setLibrary={wrappedSetLibrary} blogCalendar={blogCalendar} setBlogCalendar={setBlogCalendar} />;
+      case "brief": return <ContentBrief apiKey={apiKey} brief={brief} setBrief={setBrief} client={activeClient} voice={voice} />;
+      case "generator": return <Generator apiKey={apiKey} brief={brief} library={library} setLibrary={wrappedSetLibrary} client={activeClient} voice={voice} />;
+      case "bulk": return <BulkGenerate apiKey={apiKey} brief={brief} library={library} setLibrary={wrappedSetLibrary} client={activeClient} voice={voice} />;
+      case "campaign": return <CampaignBuilder apiKey={apiKey} brief={brief} client={activeClient} voice={voice} />;
+      case "blog": return <BlogStudio apiKey={apiKey} activeClient={activeClient} clients={clients} blogs={blogs} setBlogs={setBlogs} library={library} setLibrary={wrappedSetLibrary} blogCalendar={blogCalendar} setBlogCalendar={setBlogCalendar} voice={voice} />;
       case "quality": return <QualityScore apiKey={apiKey} />;
       case "predictor": return <PerformancePredictor apiKey={apiKey} />;
       case "abtester": return <ABTester apiKey={apiKey} />;
@@ -2850,10 +3192,10 @@ export default function App() {
       case "scheduling": return <Scheduling apiKey={apiKey} />;
       case "tracker": return <PerformanceTracker tracking={tracking} setTracking={setTracking} />;
       case "digest": return <WeeklyDigest apiKey={apiKey} tracking={tracking} />;
-      case "library": return <SavedLibrary library={library} setLibrary={setLibrary} />;
+      case "library": return <SavedLibrary library={library} setLibrary={setLibrary} clients={clients} imageStudioUrl={imageStudioUrl} />;
       case "templates": return <Templates templates={templates} setTemplates={setTemplates} />;
       case "voice": return <VoiceTrainer apiKey={apiKey} voice={voice} setVoice={setVoice} />;
-      default: return <ClientsDashboard clients={clients} setClients={setClients} library={library} onOpenClient={openClient} />;
+      default: return <ClientsDashboard clients={clients} setClients={setClients} library={library} onOpenClient={openClient} apiKey={apiKey} />;
     }
   };
 
@@ -2922,7 +3264,8 @@ export default function App() {
         ))}
       </aside>
       <main style={styles.main}>
-        <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 8 }}>
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginBottom: 8 }}>
+          <button style={styles.btnGhost} onClick={signOut}>Sign out</button>
           {showKey ? (
             <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
               <input
@@ -2936,7 +3279,7 @@ export default function App() {
             </div>
           ) : (
             <button style={styles.btnGhost} onClick={() => setShowKey(true)}>
-              {apiKey ? "● API Key Set" : "○ Set API Key"}
+              {keyIsSet ? "● API Key Set" : "○ Set API Key"}
             </button>
           )}
         </div>

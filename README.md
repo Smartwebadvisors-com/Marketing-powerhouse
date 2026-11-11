@@ -38,16 +38,23 @@ Changing clients clears the workspace and discards pending responses. Click
 client ID, workflow, and plugin version. A generated draft is not client approval.
 
 All existing AI tools also receive the plugin’s shared brand, editorial, and
-quality guidance. The current integration uses the app’s existing direct
-Anthropic connection and model; configure your own API key through the existing
-key control. Requests incur provider usage charges. No paid calls are made by
-the automated tests.
+quality guidance. The integration preserves the live studio's audience writer,
+voice cards, draft ratings, private login, saved records, and image-studio handoff.
+AI requests use the same-origin `/api/claude` backend. Configure
+`ANTHROPIC_API_KEY` on the server or use the existing personal key control.
+Requests incur provider usage charges. No paid calls are made by automated tests.
 
-Client profiles, library items, and the API key use the app’s existing browser
-local storage. This is a browser workspace, not a shared authenticated client
-database. Before a multi-user production rollout, replace browser-held keys with
-an authenticated backend and add appropriate server-side storage and access
-controls. Do not place a shared provider secret in a React environment variable.
+Set `STUDIO_PASSWORD` on the server for the existing studio login. Records retain
+the browser copy and sync through `/api/studio` to `STUDIO_DATA_PATH` (default
+`data/studio.json`). Back up this file before deployment. The shared studio
+password is not separate per-user authentication or tenant isolation. Personal
+keys entered in the browser retain the app's local storage behavior. Never put
+a server provider secret in a React environment variable.
+
+On the current Hostinger VPS, the app runs from
+`/var/www/Marketing-powerhouse` under PM2 process `marketing-studio`, behind
+Nginx on port 3003. Keep its existing PM2 environment, data directory and Nginx
+configuration when updating. Build successfully before restarting this process.
 
 ### Capabilities and limits
 
